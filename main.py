@@ -9,7 +9,7 @@ import sys
 import re
 import docx
 from urllib.parse import quote
-from difflib import SequenceMatcher  # 新增：用于模糊匹配计算相似度
+from difflib import SequenceMatcher
 
 from database import engine, Base, get_db
 from models import Signage, ActionHistory
@@ -73,52 +73,46 @@ async def read_root():
 
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db)):
-    """支持高级模糊检索、相关性评分与首字母排序"""
     if not keyword.strip(): return {"data": []}
     
     clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
-    
-    # 获取全量库数据进行模糊匹配（数据量万级以内内存处理速度极快）
     all_signs = db.query(Signage).all()
     grouped = {}
     
     for sign in all_signs:
-        clean_zh = sign.zh_term.replace('\n', '').replace('\r', '').replace(' ', '')
-        
-        # --- 核心：匹配度评分算法 (0~100分) ---
+        # 【核心修复】：拦截所有的空值、NaN 等异常空白数据
+        if not sign.zh_term or str(sign.zh_term).lower() == 'nan':
+            continue
+            
+        clean_zh = str(sign.zh_term).replace('\n', '').replace('\r', '').replace(' ', '')
+        if not clean_zh:
+            continue
+            
         if clean_keyword == clean_zh:
             score = 100.0
-        elif clean_keyword in clean_zh:
-            # 搜索词被包含：标语越短，相关性越高 (80~99分)
-            score = 80.0 + (len(clean_keyword) / len(clean_zh)) * 19.0
-        elif clean_zh in clean_keyword:
-            # 搜索词包含标语 (例如输入长句，匹配库内短词)
-            score = 80.0 + (len(clean_zh) / len(clean_keyword)) * 19.0
         else:
-            # 模糊错字容差计算 (例如: 洗间 -> 洗手间)
             score = SequenceMatcher(None, clean_keyword, clean_zh).ratio() * 100.0
+            if clean_keyword in clean_zh or clean_zh in clean_keyword:
+                # 【核心修复】：引入长度惩罚因子，解决 "人" > "人行横道" 的问题
+                len_ratio = min(len(clean_keyword), len(clean_zh)) / max(len(clean_keyword), len(clean_zh))
+                # 长度相差越大，加分越少
+                score = max(score, 70.0 + 29.0 * len_ratio)
         
-        # 设定显示阈值为 40 分
         if score >= 40.0:
             zh = sign.zh_term
             if zh not in grouped:
                 grouped[zh] = {
-                    "zh_text": zh, 
-                    "category": sign.category,
-                    "translations": set(), 
-                    "seq_id": sign.sequence_id,
-                    "associated_items": [], 
-                    "show_assoc": False,
-                    "match_score": score # 记录匹配分
+                    "zh_text": zh, "category": sign.category,
+                    "translations": set(), "seq_id": sign.sequence_id,
+                    "associated_items": [], "show_assoc": False,
+                    "match_score": score
                 }
             grouped[zh]["translations"].add(sign.en_translation)
-            # 如果存在多条同名中文，保留最高分
             if score > grouped[zh]["match_score"]:
                 grouped[zh]["match_score"] = score
 
     if not grouped: return {"data": []}
 
-    # 序列数据组装
     seq_ids = [data["seq_id"] for data in grouped.values() if data["seq_id"]]
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     all_associated_items = {item.id: item for item in associated}.values()
@@ -139,28 +133,52 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db)):
                     seen_bro_zh.add(b.zh_term)
 
     result_list = list(grouped.values())
-    
-    # --- 核心：多重排序 (匹配度从高到低 -> 匹配度相同则首字母拼音 A-Z) ---
-    # Python 的 sort 是稳定排序，因此构造一个元组进行复合排序：(-匹配度, 拼音)
     result_list.sort(key=lambda x: (-x["match_score"], get_sort_key(x["zh_text"])))
     
     return {"data": result_list}
 
-@app.post("/api/edit_translation")
-def edit_translation(zh_text: str = Form(...), old_en: str = Form(...), new_en: str = Form(...), db: Session = Depends(get_db)):
-    record = db.query(Signage).filter_by(zh_term=zh_text, en_translation=old_en).first()
-    if not record: return {"status": "error", "msg": "找不到原始译文记录，修改失败。"}
-    if db.query(Signage).filter_by(zh_term=zh_text, en_translation=new_en).first():
-         return {"status": "error", "msg": "该译文已存在！"}
+# 【全新接口】：支持全面修改中文、英文和分类，并自动抹平换行符差异
+@app.post("/api/edit_signage")
+def edit_signage(
+    old_zh: str = Form(...), old_en: str = Form(...),
+    new_zh: str = Form(...), new_en: str = Form(...), category: str = Form(""),
+    db: Session = Depends(get_db)
+):
+    # 清洗所有的前端传入换行符
+    clean_old_zh = old_zh.replace('\r\n', '\n').replace('\r', '')
+    clean_old_en = old_en.replace('\r\n', '\n').replace('\r', '')
+    clean_new_zh = new_zh.replace('\r\n', '\n').replace('\r', '')
+    clean_new_en = new_en.replace('\r\n', '\n').replace('\r', '')
 
-    record.en_translation = new_en
-    db.add(ActionHistory(action_type="编辑", zh_term=zh_text, en_translation=new_en, category=record.category))
+    record = db.query(Signage).filter(
+        func.replace(Signage.zh_term, '\r', '') == clean_old_zh,
+        func.replace(Signage.en_translation, '\r', '') == clean_old_en
+    ).first()
+
+    if not record: 
+        return {"status": "error", "msg": "在数据库中找不到原始词条，修改失败。"}
+    
+    if (clean_old_zh != clean_new_zh or clean_old_en != clean_new_en):
+        if db.query(Signage).filter(
+            func.replace(Signage.zh_term, '\r', '') == clean_new_zh,
+            func.replace(Signage.en_translation, '\r', '') == clean_new_en
+        ).first():
+            return {"status": "error", "msg": "修改后的中英文组合已在词库中存在！"}
+
+    record.zh_term = clean_new_zh
+    record.en_translation = clean_new_en
+    record.category = category
+    
+    db.add(ActionHistory(action_type="编辑", zh_term=clean_new_zh, en_translation=clean_new_en, category=category))
     db.commit()
-    return {"status": "success", "msg": "译文修改成功！"}
+    return {"status": "success", "msg": "词条全方位修改成功！"}
 
 @app.post("/api/add_single")
 def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db)):
-    df = pd.DataFrame([{"公示语中文": zh_text, "英文译文": en_text}])
+    clean_zh = zh_text.replace('\r\n', '\n').replace('\r', '')
+    clean_en = en_text.replace('\r\n', '\n').replace('\r', '')
+    
+    df = pd.DataFrame([{"公示语中文": clean_zh, "英文译文": clean_en}])
     processed_list = process_dataframe_pipeline(df)
     
     added_count = 0
@@ -276,7 +294,6 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
 
 @app.post("/api/match_docx")
 async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """仅提取 Word 中的中文并去词库中比对"""
     if file.filename.endswith('.doc'):
         return {"status": "error", "msg": "不支持旧版 .doc 格式，请另存为 .docx 格式后重试！"}
     elif not file.filename.endswith('.docx'):
@@ -308,14 +325,14 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
                 continue
                 
             clean_zh = extract_zh_sign(raw_sign)
-            if clean_zh:
+            # 【核心修复】：防止空值进入提取集合
+            if clean_zh and clean_zh.lower() != 'nan':
                 extracted_zh_terms.add(clean_zh)
 
     if not extracted_zh_terms:
         return {"status": "error", "msg": "未能在文档中提取到有效的中文标识（请确保表格包含'标识内容'列）。"}
 
     clean_extracted = {term.replace('\n', '').replace('\r', '').replace(' ', '') for term in extracted_zh_terms}
-    
     db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
     matched = db.query(Signage).filter(db_zh_clean.in_(clean_extracted)).all()
 
@@ -357,8 +374,6 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
         "extracted_count": len(extracted_zh_terms)
     }
 
-# ================= 历史记录与管理接口 =================
-
 @app.get("/api/history")
 def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db)):
     query = db.query(ActionHistory)
@@ -368,20 +383,23 @@ def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_
 
 @app.post("/api/history/update")
 def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation: str = Form(...), category: str = Form(...), db: Session = Depends(get_db)):
+    clean_zh = zh_term.replace('\r\n', '\n').replace('\r', '')
+    clean_en = en_translation.replace('\r\n', '\n').replace('\r', '')
+
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record:
         return {"status": "error", "msg": "找不到该条历史记录"}
 
     sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
     
-    record.zh_term = zh_term
-    record.en_translation = en_translation
+    record.zh_term = clean_zh
+    record.en_translation = clean_en
     record.category = category
     record.action_type = "记录修改"
     
     if sign:
-        sign.zh_term = zh_term
-        sign.en_translation = en_translation
+        sign.zh_term = clean_zh
+        sign.en_translation = clean_en
         sign.category = category
 
     db.commit()
