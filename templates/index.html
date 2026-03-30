@@ -77,6 +77,63 @@
             </el-card>
         </el-tab-pane>
 
+        <el-tab-pane label="📝 文档比对">
+            <el-card shadow="hover" style="margin-bottom: 20px;">
+                <template #header><b>上传 Word 文档进行词库比对</b></template>
+                <el-upload drag action="" :http-request="matchUpload" :show-file-list="false" accept=".docx, .doc" :disabled="isMatching">
+                    <div class="el-upload__text">拖拽 Word (.docx) 到此处，或 <em>点击上传</em></div>
+                    <template #tip>
+                        <div class="el-upload__tip">系统将自动提取文档表格中的中文标识，并与当前线上词库进行精确匹配。</div>
+                    </template>
+                </el-upload>
+                
+                <div v-if="isMatching" class="progress-wrapper">
+                    <el-progress :percentage="matchPercent" :text-inside="true" :stroke-width="18" :status="matchPercent === 100 ? 'success' : ''" striped striped-flow></el-progress>
+                    <div style="text-align: center; margin-top: 8px; color: #606266; font-size: 13px;">
+                        <i :class="matchPercent === 100 ? 'el-icon-loading' : ''"></i>
+                        {{ matchStatusText }}
+                    </div>
+                </div>
+            </el-card>
+
+            <div v-if="matchResults.length > 0">
+                <h3 style="margin-bottom: 15px; color: #303133;">🎉 匹配结果：为您在词库中找到了 {{ matchResults.length }} 个已有词条</h3>
+                
+                <el-card class="box-card" v-for="item in matchResults" :key="item.zh_text">
+                    <template #header>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span class="zh-title">{{ item.zh_text }}</span>
+                            <el-tag :type="getCategoryType(item.category)" effect="light" round>{{ item.category }}</el-tag>
+                        </div>
+                    </template>
+                    <div style="margin-bottom: 10px;">
+                        <span style="font-weight: bold; color: #409EFF; font-size: 14px;">标准译文：</span>
+                        <div style="margin-top: 12px;">
+                            <div v-for="en in item.translations" :key="en" class="translation-row">
+                                <el-tag class="translation-tag" size="large" effect="plain">{{ en }}</el-tag>
+                                <div class="action-btns">
+                                    <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
+                                    <el-button size="small" type="warning" plain @click="editTranslation(item.zh_text, en)">编辑</el-button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="item.associated_items && item.associated_items.length > 0" class="asso-container">
+                        <el-button type="info" link @click="item.show_assoc = !item.show_assoc">
+                            <span style="font-weight: bold;">{{ item.show_assoc ? '收起序列关联词条 ▲' : '显示同组序列关联词条 (' + item.associated_items.length + ') ▼' }}</span>
+                        </el-button>
+                        <div v-show="item.show_assoc" class="asso-list">
+                            <div v-for="asso in item.associated_items" :key="asso.zh_text" class="asso-item">
+                                <div class="asso-zh">{{ asso.order }}. {{ asso.zh_text }}</div>
+                                <div class="asso-en">{{ asso.en_texts.join(' / ') }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </el-card>
+            </div>
+            <el-empty v-else-if="hasMatched" description="此文档提取出的中文词汇，在当前词库中未能找到任何匹配项"></el-empty>
+        </el-tab-pane>
+
         <el-tab-pane label="⚙️ 数据录入与管理">
             <el-row :gutter="20">
                 <el-col :span="12">
@@ -97,7 +154,7 @@
                 </el-col>
                 <el-col :span="12">
                     <el-card shadow="hover">
-                        <template #header><b>📂 批量文件上传 (Excel / Word)</b></template>
+                        <template #header><b>📂 批量文件上传入库 (Excel / Word)</b></template>
                         <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx, .doc" :disabled="uploading">
                             <div class="el-upload__text">拖拽 Excel 或 Word 到此处，或 <em>点击上传</em></div>
                             <template #tip>
@@ -216,13 +273,13 @@
                 recentAdditions: [],
                 historyData: [],
                 historyFilterCategory: '',
-                uploading: false,
-                uploadPercent: 0,
-                uploadStatusText: '',
+                uploading: false, uploadPercent: 0, uploadStatusText: '',
                 
-                // 行内编辑相关状态
-                editDialogVisible: false,
-                isEditingRecord: false,
+                // 比对相关状态
+                isMatching: false, matchPercent: 0, matchStatusText: '', 
+                matchResults: [], hasMatched: false,
+                
+                editDialogVisible: false, isEditingRecord: false,
                 editForm: { id: null, zh_term: '', en_translation: '', category: '' }
             }
         },
@@ -247,6 +304,8 @@
                     ElementPlus.ElMessage.success('已成功复制译文'); t.remove();
                 }
             },
+            
+            // 核心功能：前端局部无刷新响应修改，同时作用于搜索结果和比对结果
             editTranslation(zh_text, old_en) {
                 ElementPlus.ElMessageBox.prompt(`修改【${zh_text}】的英文译文`, '编辑译文', {
                     confirmButtonText: '保存', cancelButtonText: '取消', inputValue: old_en, inputType: 'textarea'
@@ -259,7 +318,24 @@
                     axios.post('/api/edit_translation', fd).then(res => {
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
-                            this.handleSearch(); this.fetchHistory();
+                            
+                            // 动态更新搜索页数据
+                            this.searchResults.forEach(item => {
+                                if (item.zh_text === zh_text) {
+                                    const idx = item.translations.indexOf(old_en);
+                                    if (idx !== -1) item.translations.splice(idx, 1, new_en);
+                                }
+                            });
+                            
+                            // 动态更新文档比对页数据
+                            this.matchResults.forEach(item => {
+                                if (item.zh_text === zh_text) {
+                                    const idx = item.translations.indexOf(old_en);
+                                    if (idx !== -1) item.translations.splice(idx, 1, new_en);
+                                }
+                            });
+                            
+                            this.fetchHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
                 }).catch(() => {});
@@ -275,68 +351,83 @@
                 }).finally(() => { this.isSubmitting = false; })
             },
             
-            customUpload(options) {
+            // ================= 新增：文档词库比对 =================
+            matchUpload(options) {
                 const file = options.file;
                 const extension = file.name.split('.').pop().toLowerCase();
                 
                 if (extension === 'doc') {
-                    ElementPlus.ElMessage.warning({
-                        message: '提示：系统检测到旧版 .doc 文件。为确保标语解析准确率，请先用 Word 软件将其“另存为” .docx 格式后再上传！',
-                        duration: 5000,
-                        showClose: true
-                    });
-                    options.onError();
-                    return;
+                    ElementPlus.ElMessage.warning({ message: '请将 .doc 另存为 .docx 后再进行比对！', duration: 3000 });
+                    options.onError(); return;
+                }
+                if (extension !== 'docx') {
+                    ElementPlus.ElMessage.error('仅支持 .docx 格式的文件！');
+                    options.onError(); return;
                 }
 
-                const formData = new FormData();
-                formData.append('file', file);
+                const formData = new FormData(); formData.append('file', file);
+                this.isMatching = true; this.matchPercent = 0; this.matchStatusText = '正在提取并比对文档数据...';
+                this.matchResults = []; this.hasMatched = false;
 
-                let url = '';
-                if (extension === 'xlsx') {
-                    url = '/api/upload_excel';
-                } else if (extension === 'docx') {
-                    url = '/api/upload_docx';
-                } else {
-                    ElementPlus.ElMessage.error('仅支持 .xlsx 和 .docx 格式的文件！');
-                    options.onError();
-                    return;
-                }
-
-                this.uploading = true;
-                this.uploadPercent = 0;
-                this.uploadStatusText = '正在上传文件至服务器...';
-
-                axios.post(url, formData, {
+                axios.post('/api/match_docx', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                     onUploadProgress: progressEvent => {
                         if (progressEvent.lengthComputable) {
                             let percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                            this.uploadPercent = percent;
-                            if (percent === 100) {
-                                this.uploadStatusText = '上传完成！云端正在执行清洗、侦测与分类，请稍候...';
-                            }
+                            this.matchPercent = percent;
+                            if (percent === 100) this.matchStatusText = '上传完成，云端数据库极速匹配中...';
                         }
                     }
                 }).then(res => {
                     if (res.data.status === 'success') {
-                        ElementPlus.ElNotification({ title: '处理完毕', message: res.data.msg, type: 'success', duration: 0});
-                        this.fetchRecentAdditions(); 
-                        this.fetchHistory();
+                        this.matchResults = res.data.data;
+                        this.hasMatched = true;
+                        ElementPlus.ElNotification({ title: '比对完毕', message: `共提取 ${res.data.extracted_count} 个有效词条，在库中命中 ${this.matchResults.length} 个！`, type: 'success' });
                         options.onSuccess(res.data);
                     } else {
                         ElementPlus.ElMessage.error(res.data.msg);
                         options.onError();
                     }
                 }).catch(err => {
-                    ElementPlus.ElMessage.error('上传或解析文件失败，请检查网络和文档格式');
+                    ElementPlus.ElMessage.error('文档解析失败，请检查网络和文档格式');
                     options.onError();
                 }).finally(() => {
-                    setTimeout(() => { this.uploading = false; }, 1000); 
+                    setTimeout(() => { this.isMatching = false; }, 800); 
                 });
             },
+            
+            customUpload(options) {
+                const file = options.file;
+                const extension = file.name.split('.').pop().toLowerCase();
+                if (extension === 'doc') {
+                    ElementPlus.ElMessage.warning({ message: '提示：系统检测到旧版 .doc 文件。为确保标语解析准确率，请先用 Word 软件将其“另存为” .docx 格式后再上传！', duration: 5000, showClose: true });
+                    options.onError(); return;
+                }
+                const formData = new FormData(); formData.append('file', file);
+                let url = '';
+                if (extension === 'xlsx') url = '/api/upload_excel';
+                else if (extension === 'docx') url = '/api/upload_docx';
+                else { ElementPlus.ElMessage.error('仅支持 .xlsx 和 .docx！'); options.onError(); return; }
 
-            // ================= 历史记录与编辑管理 =================
+                this.uploading = true; this.uploadPercent = 0; this.uploadStatusText = '正在上传文件至服务器...';
+
+                axios.post(url, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                    onUploadProgress: p => {
+                        if (p.lengthComputable) {
+                            let percent = Math.round((p.loaded * 100) / p.total);
+                            this.uploadPercent = percent;
+                            if (percent === 100) this.uploadStatusText = '上传完成！云端正在执行清洗、侦测与分类，请稍候...';
+                        }
+                    }
+                }).then(res => {
+                    if (res.data.status === 'success') {
+                        ElementPlus.ElNotification({ title: '处理完毕', message: res.data.msg, type: 'success', duration: 0});
+                        this.fetchRecentAdditions(); this.fetchHistory(); options.onSuccess(res.data);
+                    } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
+                }).catch(err => { ElementPlus.ElMessage.error('上传失败'); options.onError(); }).finally(() => { setTimeout(() => { this.uploading = false; }, 1000); });
+            },
+
             fetchRecentAdditions() {
                 axios.get('/api/history', { params: { limit: 10 } }).then(res => {
                     this.recentAdditions = res.data.data.filter(item => item.action_type !== '记录修改' && item.action_type !== '编辑').slice(0, 10);
@@ -352,58 +443,35 @@
                 this.editDialogVisible = true;
             },
             submitHistoryEdit() {
-                if(!this.editForm.zh_term || !this.editForm.en_translation) return ElementPlus.ElMessage.warning('中文或英文内容不能为空！');
+                if(!this.editForm.zh_term || !this.editForm.en_translation) return ElementPlus.ElMessage.warning('内容不能为空！');
                 this.isEditingRecord = true;
-                
                 const fd = new FormData();
-                fd.append('id', this.editForm.id);
-                fd.append('zh_term', this.editForm.zh_term);
-                fd.append('en_translation', this.editForm.en_translation);
-                fd.append('category', this.editForm.category);
-                
+                fd.append('id', this.editForm.id); fd.append('zh_term', this.editForm.zh_term);
+                fd.append('en_translation', this.editForm.en_translation); fd.append('category', this.editForm.category);
                 axios.post('/api/history/update', fd).then(res => {
                     if(res.data.status === 'success') {
                         ElementPlus.ElMessage.success(res.data.msg);
-                        this.editDialogVisible = false;
-                        this.fetchHistory();
-                        this.fetchRecentAdditions();
-                    } else {
-                        ElementPlus.ElMessage.error(res.data.msg);
-                    }
+                        this.editDialogVisible = false; this.fetchHistory(); this.fetchRecentAdditions();
+                    } else ElementPlus.ElMessage.error(res.data.msg);
                 }).finally(() => { this.isEditingRecord = false; });
             },
             deleteHistoryRecord(row) {
                 ElementPlus.ElMessageBox.confirm(
-                    `您即将删除【${row.zh_term}】这条记录。确认删除后，词库中的对应数据也将一并清除！是否继续？`, 
-                    '危险操作警告', 
+                    `删除【${row.zh_term}】后，词库中的对应数据也将清除！是否继续？`, '危险操作警告', 
                     { confirmButtonText: '确定永久删除', cancelButtonText: '取消', type: 'error' }
                 ).then(() => {
-                    const fd = new FormData();
-                    fd.append('id', row.id);
+                    const fd = new FormData(); fd.append('id', row.id);
                     axios.post('/api/history/delete', fd).then(res => {
                         if(res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
-                            this.fetchHistory();
-                            this.fetchRecentAdditions();
-                        } else {
-                            ElementPlus.ElMessage.error(res.data.msg);
-                        }
+                            this.fetchHistory(); this.fetchRecentAdditions();
+                        } else ElementPlus.ElMessage.error(res.data.msg);
                     });
                 }).catch(() => {});
             },
-            exportHistory() {
-                const url = `/api/export_history?category=${encodeURIComponent(this.historyFilterCategory)}`;
-                window.location.href = url;
-            },
-            getCategoryType(cat) {
-                const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' };
-                return map[cat] || 'primary';
-            },
-            formatDate(dateStr) {
-                if(!dateStr) return '';
-                const d = new Date(dateStr);
-                return d.toLocaleString('zh-CN', { hour12: false });
-            }
+            exportHistory() { window.location.href = `/api/export_history?category=${encodeURIComponent(this.historyFilterCategory)}`; },
+            getCategoryType(cat) { const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' }; return map[cat] || 'primary'; },
+            formatDate(dateStr) { if(!dateStr) return ''; return new Date(dateStr).toLocaleString('zh-CN', { hour12: false }); }
         }
     };
     Vue.createApp(App).use(ElementPlus).mount('#app');
