@@ -9,6 +9,7 @@ import sys
 import re
 import docx
 from urllib.parse import quote
+from difflib import SequenceMatcher  # 新增：用于模糊匹配计算相似度
 
 from database import engine, Base, get_db
 from models import Signage, ActionHistory
@@ -29,7 +30,6 @@ def get_resource_path(relative_path):
 # ================= 工具函数：Word 文本提取 =================
 
 def extract_zh_sign(text: str) -> str:
-    """提取标识内容（纯中文部分）"""
     if not text: return ""
     text = text.replace("：", ":")
     if "英文:" in text: text = text.split("英文:")[0]
@@ -44,7 +44,6 @@ def extract_zh_sign(text: str) -> str:
     return text.strip()
 
 def extract_en_suggestion(text: str) -> str:
-    """提取整改建议（纯英文部分）"""
     if not text: return ""
     text = text.replace("：", ":")
     if "英文:" in text: return text.split("英文:")[1].strip()
@@ -74,28 +73,56 @@ async def read_root():
 
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db)):
+    """支持高级模糊检索、相关性评分与首字母排序"""
     if not keyword.strip(): return {"data": []}
     
     clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
-    db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
     
-    matched = db.query(Signage).filter(db_zh_clean.like(f"%{clean_keyword}%")).all()
-    if not matched: return {"data": []}
-
-    seq_ids = [m.sequence_id for m in matched if m.sequence_id]
-    associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
-        
+    # 获取全量库数据进行模糊匹配（数据量万级以内内存处理速度极快）
+    all_signs = db.query(Signage).all()
     grouped = {}
-    for item in matched:
-        if item.zh_term not in grouped:
-            grouped[item.zh_term] = {
-                "zh_text": item.zh_term, "category": item.category,
-                "translations": set(), "seq_id": item.sequence_id,
-                "associated_items": [], "show_assoc": False
-            }
-        grouped[item.zh_term]["translations"].add(item.en_translation)
+    
+    for sign in all_signs:
+        clean_zh = sign.zh_term.replace('\n', '').replace('\r', '').replace(' ', '')
+        
+        # --- 核心：匹配度评分算法 (0~100分) ---
+        if clean_keyword == clean_zh:
+            score = 100.0
+        elif clean_keyword in clean_zh:
+            # 搜索词被包含：标语越短，相关性越高 (80~99分)
+            score = 80.0 + (len(clean_keyword) / len(clean_zh)) * 19.0
+        elif clean_zh in clean_keyword:
+            # 搜索词包含标语 (例如输入长句，匹配库内短词)
+            score = 80.0 + (len(clean_zh) / len(clean_keyword)) * 19.0
+        else:
+            # 模糊错字容差计算 (例如: 洗间 -> 洗手间)
+            score = SequenceMatcher(None, clean_keyword, clean_zh).ratio() * 100.0
+        
+        # 设定显示阈值为 40 分
+        if score >= 40.0:
+            zh = sign.zh_term
+            if zh not in grouped:
+                grouped[zh] = {
+                    "zh_text": zh, 
+                    "category": sign.category,
+                    "translations": set(), 
+                    "seq_id": sign.sequence_id,
+                    "associated_items": [], 
+                    "show_assoc": False,
+                    "match_score": score # 记录匹配分
+                }
+            grouped[zh]["translations"].add(sign.en_translation)
+            # 如果存在多条同名中文，保留最高分
+            if score > grouped[zh]["match_score"]:
+                grouped[zh]["match_score"] = score
 
+    if not grouped: return {"data": []}
+
+    # 序列数据组装
+    seq_ids = [data["seq_id"] for data in grouped.values() if data["seq_id"]]
+    associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     all_associated_items = {item.id: item for item in associated}.values()
+        
     for zh, data in grouped.items():
         data["translations"] = list(data["translations"])
         if data["seq_id"]:
@@ -112,14 +139,11 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db)):
                     seen_bro_zh.add(b.zh_term)
 
     result_list = list(grouped.values())
-    def relevance_sort(x):
-        zh = x["zh_text"]
-        clean_zh = zh.replace('\n', '').replace('\r', '').replace(' ', '')
-        is_exact = 0 if clean_zh == clean_keyword else 1
-        is_start = 0 if clean_zh.startswith(clean_keyword) else 1
-        return (is_exact, is_start, len(clean_zh), get_sort_key(zh))
-        
-    result_list.sort(key=relevance_sort)
+    
+    # --- 核心：多重排序 (匹配度从高到低 -> 匹配度相同则首字母拼音 A-Z) ---
+    # Python 的 sort 是稳定排序，因此构造一个元组进行复合排序：(-匹配度, 拼音)
+    result_list.sort(key=lambda x: (-x["match_score"], get_sort_key(x["zh_text"])))
+    
     return {"data": result_list}
 
 @app.post("/api/edit_translation")
@@ -250,8 +274,6 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
     except Exception as e:
         return {"status": "error", "msg": f"数据处理过程中发生错误: {str(e)}"}
 
-# ================= 新增：文档词库比对接口 =================
-
 @app.post("/api/match_docx")
 async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """仅提取 Word 中的中文并去词库中比对"""
@@ -292,14 +314,11 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
     if not extracted_zh_terms:
         return {"status": "error", "msg": "未能在文档中提取到有效的中文标识（请确保表格包含'标识内容'列）。"}
 
-    # 净化提取出来的词条（去空格回车），用于和数据库比对
     clean_extracted = {term.replace('\n', '').replace('\r', '').replace(' ', '') for term in extracted_zh_terms}
     
-    # 从数据库中精确比对（忽略空格回车）
     db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
     matched = db.query(Signage).filter(db_zh_clean.in_(clean_extracted)).all()
 
-    # 复用搜索结果的聚合逻辑
     seq_ids = [m.sequence_id for m in matched if m.sequence_id]
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
         
