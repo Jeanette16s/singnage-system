@@ -17,13 +17,13 @@
             font-weight: 500;
             margin-right: 15px;
             margin-bottom: 5px;
-            white-space: pre-wrap;       /* 允许换行 */
-            word-break: break-word;      /* 单词过长时截断换行 */
-            height: auto !important;     /* 覆盖默认固定高度 */
-            padding: 8px 12px !important;/* 增加内边距让框更饱满 */
-            line-height: 1.5 !important; /* 调整行高 */
+            white-space: pre-wrap;       
+            word-break: break-word;      
+            height: auto !important;     
+            padding: 8px 12px !important;
+            line-height: 1.5 !important; 
             border-radius: 8px !important;
-            display: inline-block;       /* 根据内容长度自适应宽度 */
+            display: inline-block;       
         }
         .action-btns { opacity: 0.6; transition: opacity 0.3s; }
         .translation-row:hover .action-btns { opacity: 1; }
@@ -41,10 +41,8 @@
     <div class="header"><h1>🌐 智能公示语词库管理系统</h1></div>
 
     <el-tabs type="border-card">
-        <!-- Tab 1: 搜索页 -->
         <el-tab-pane label="🔍 词库查询">
             <div class="search-bar">
-                <!-- 修改为支持换行的 Textarea -->
                 <el-input 
                     type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" 
                     v-model="searchKeyword" 
@@ -89,7 +87,6 @@
             </el-card>
         </el-tab-pane>
 
-        <!-- Tab 2: 录入页 -->
         <el-tab-pane label="⚙️ 数据录入与管理">
             <el-row :gutter="20">
                 <el-col :span="12">
@@ -110,16 +107,20 @@
                 </el-col>
                 <el-col :span="12">
                     <el-card shadow="hover">
-                        <template #header><b>📂 批量 Excel 上传</b></template>
-                        <el-upload drag action="/api/upload_excel" :on-success="handleUploadSuccess" :on-error="handleUploadError" accept=".xlsx">
-                            <div class="el-upload__text">拖拽 Excel 到此处，或 <em>点击上传</em></div>
-                            <template #tip><div class="el-upload__tip">请确保表格包含 <b>公示语中文</b> 和 <b>英文译文</b> 列。</div></template>
+                        <template #header><b>📂 批量文件上传 (Excel / Word)</b></template>
+                        <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx">
+                            <div class="el-upload__text">拖拽 Excel 或 Word 到此处，或 <em>点击上传</em></div>
+                            <template #tip>
+                                <div class="el-upload__tip" style="line-height: 1.6;">
+                                    <b>Excel (.xlsx)</b>：需包含“公示语中文”和“英文译文”列。<br>
+                                    <b>Word (.docx)</b>：需包含“标识内容”和“整改建议”列的表格。
+                                </div>
+                            </template>
                         </el-upload>
                     </el-card>
                 </el-col>
             </el-row>
             
-            <!-- 最近添加的标语展示区 -->
             <el-card shadow="never" style="margin-top: 20px;">
                 <template #header><b>👀 本次运行最近录入/导入的标语 (Top 10)</b></template>
                 <el-table :data="recentAdditions" style="width: 100%" size="small" stripe>
@@ -135,7 +136,6 @@
             </el-card>
         </el-tab-pane>
 
-        <!-- Tab 3: 历史操作日志 -->
         <el-tab-pane label="🕒 历史记录与导出">
             <el-card shadow="never">
                 <div style="margin-bottom: 15px; display: flex; gap: 10px;">
@@ -227,30 +227,57 @@
                     this.fetchRecentAdditions(); this.fetchHistory();
                 }).finally(() => { this.isSubmitting = false; })
             },
-            handleUploadSuccess(res) {
-                if(res.status === 'success') {
-                    ElementPlus.ElNotification({ title: '处理完毕', message: res.msg, type: 'success', duration: 0});
-                    this.fetchRecentAdditions(); this.fetchHistory();
-                } else ElementPlus.ElMessage.error(res.msg);
-            },
-            handleUploadError() { ElementPlus.ElMessage.error('上传文件失败，请检查网络'); },
             
-            // 获取最新 10 条新增记录（展示在管理页下方）
-            fetchRecentAdditions() {
-                axios.get('/api/history', { params: { limit: 10 } }).then(res => {
-                    this.recentAdditions = res.data.data.filter(item => item.action_type === '新增' || item.action_type === '导入').slice(0, 10);
+            // 【重要修改】自定义上传逻辑，智能分发给不同接口
+            customUpload(options) {
+                const file = options.file;
+                const extension = file.name.split('.').pop().toLowerCase();
+                const formData = new FormData();
+                formData.append('file', file);
+
+                let url = '';
+                if (extension === 'xlsx') {
+                    url = '/api/upload_excel';
+                } else if (extension === 'docx') {
+                    url = '/api/upload_docx';
+                } else {
+                    ElementPlus.ElMessage.error('仅支持 .xlsx 和 .docx 格式的文件！');
+                    options.onError();
+                    return;
+                }
+
+                axios.post(url, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                }).then(res => {
+                    if (res.data.status === 'success') {
+                        ElementPlus.ElNotification({ title: '处理完毕', message: res.data.msg, type: 'success', duration: 0});
+                        this.fetchRecentAdditions(); 
+                        this.fetchHistory();
+                        options.onSuccess(res.data);
+                    } else {
+                        ElementPlus.ElMessage.error(res.data.msg);
+                        options.onError();
+                    }
+                }).catch(err => {
+                    ElementPlus.ElMessage.error('上传文件失败，请检查网络');
+                    options.onError();
                 });
             },
-            // 获取全量历史记录供历史表格使用
+
+            fetchRecentAdditions() {
+                axios.get('/api/history', { params: { limit: 10 } }).then(res => {
+                    // 放宽条件，只要不是"编辑"就认为是新增的数据源
+                    this.recentAdditions = res.data.data.filter(item => item.action_type !== '编辑').slice(0, 10);
+                });
+            },
             fetchHistory() {
                 axios.get('/api/history', { params: { category: this.historyFilterCategory, limit: 1000 } }).then(res => {
                     this.historyData = res.data.data;
                 });
             },
-            // 导出历史记录
             exportHistory() {
                 const url = `/api/export_history?category=${encodeURIComponent(this.historyFilterCategory)}`;
-                window.location.href = url; // 触发浏览器下载
+                window.location.href = url;
             },
             getCategoryType(cat) {
                 const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' };
