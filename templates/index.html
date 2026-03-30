@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>智能公示语词库系统</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+    <script src="https://unpkg.com/vue@3"></script>
+    <script src="https://unpkg.com/element-plus"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; background-color: #f5f7fa; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .box-card { margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); }
+        .search-bar { max-width: 600px; margin: 0 auto 30px auto; display: flex; align-items: flex-end; gap: 10px; }
+        .translation-row { display: flex; align-items: center; margin-bottom: 10px; }
+        .translation-tag { font-size: 15px;
+            font-weight: 500;
+            margin-right: 15px;
+            margin-bottom: 5px;
+            white-space: pre-wrap;       /* 允许换行 */
+            word-break: break-word;      /* 单词过长时截断换行 */
+            height: auto !important;     /* 覆盖默认固定高度 */
+            padding: 8px 12px !important;/* 增加内边距让框更饱满 */
+            line-height: 1.5 !important; /* 调整行高 */
+            border-radius: 8px !important;
+            display: inline-block;       /* 根据内容长度自适应宽度 */
+        }
+        .action-btns { opacity: 0.6; transition: opacity 0.3s; }
+        .translation-row:hover .action-btns { opacity: 1; }
+        .asso-container { margin-top: 15px; border-top: 1px dashed #ebeef5; padding-top: 10px; }
+        .asso-list { background-color: #fafafa; padding: 12px; border-radius: 6px; margin-top: 8px; }
+        .asso-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #f0f2f5; }
+        .asso-item:last-child { border-bottom: none; }
+        .asso-zh { font-weight: bold; color: #606266; font-size: 14px; white-space: pre-wrap; }
+        .asso-en { color: #8c939d; font-size: 13px; text-align: right; max-width: 60%; word-break: break-word; }
+        .zh-title { font-size: 18px; font-weight: bold; color: #303133; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div class="header"><h1>🌐 智能公示语词库管理系统</h1></div>
+
+    <el-tabs type="border-card">
+        <!-- Tab 1: 搜索页 -->
+        <el-tab-pane label="🔍 词库查询">
+            <div class="search-bar">
+                <!-- 修改为支持换行的 Textarea -->
+                <el-input 
+                    type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" 
+                    v-model="searchKeyword" 
+                    placeholder="输入中文标语查询 (支持多行/换行/粘贴格式)" 
+                    @keydown.enter.prevent="handleSearch" style="flex: 1;">
+                </el-input>
+                <el-button @click="handleSearch" type="primary" style="height: 32px;">搜索</el-button>
+            </div>
+
+            <el-empty v-if="searchResults.length === 0" description="暂无搜索结果"></el-empty>
+
+            <el-card class="box-card" v-for="item in searchResults" :key="item.zh_text">
+                <template #header>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span class="zh-title">{{ item.zh_text }}</span>
+                        <el-tag :type="getCategoryType(item.category)" effect="light" round>{{ item.category }}</el-tag>
+                    </div>
+                </template>
+                <div style="margin-bottom: 10px;">
+                    <span style="font-weight: bold; color: #409EFF; font-size: 14px;">标准译文：</span>
+                    <div style="margin-top: 12px;">
+                        <div v-for="en in item.translations" :key="en" class="translation-row">
+                            <el-tag class="translation-tag" size="large" effect="plain">{{ en }}</el-tag>
+                            <div class="action-btns">
+                                <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
+                                <el-button size="small" type="warning" plain @click="editTranslation(item.zh_text, en)">编辑</el-button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="item.associated_items && item.associated_items.length > 0" class="asso-container">
+                    <el-button type="info" link @click="item.show_assoc = !item.show_assoc">
+                        <span style="font-weight: bold;">{{ item.show_assoc ? '收起序列关联词条 ▲' : '显示同组序列关联词条 (' + item.associated_items.length + ') ▼' }}</span>
+                    </el-button>
+                    <div v-show="item.show_assoc" class="asso-list">
+                        <div v-for="asso in item.associated_items" :key="asso.zh_text" class="asso-item">
+                            <div class="asso-zh">{{ asso.order }}. {{ asso.zh_text }}</div>
+                            <div class="asso-en">{{ asso.en_texts.join(' / ') }}</div>
+                        </div>
+                    </div>
+                </div>
+            </el-card>
+        </el-tab-pane>
+
+        <!-- Tab 2: 录入页 -->
+        <el-tab-pane label="⚙️ 数据录入与管理">
+            <el-row :gutter="20">
+                <el-col :span="12">
+                    <el-card shadow="hover">
+                        <template #header><b>✍️ 单条手动录入</b></template>
+                        <el-form :model="singleForm" label-width="100px">
+                            <el-form-item label="中文标语">
+                                <el-input type="textarea" :autosize="{minRows:2}" v-model="singleForm.zh_text" placeholder="例如：员工/访客专用"></el-input>
+                            </el-form-item>
+                            <el-form-item label="英文翻译">
+                                <el-input type="textarea" :autosize="{minRows:2}" v-model="singleForm.en_text" placeholder="例如：STAFF/VISITORS ONLY"></el-input>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="submitSingle" :loading="isSubmitting">提交并自动处理</el-button>
+                            </el-form-item>
+                        </el-form>
+                    </el-card>
+                </el-col>
+                <el-col :span="12">
+                    <el-card shadow="hover">
+                        <template #header><b>📂 批量 Excel 上传</b></template>
+                        <el-upload drag action="/api/upload_excel" :on-success="handleUploadSuccess" :on-error="handleUploadError" accept=".xlsx">
+                            <div class="el-upload__text">拖拽 Excel 到此处，或 <em>点击上传</em></div>
+                            <template #tip><div class="el-upload__tip">请确保表格包含 <b>公示语中文</b> 和 <b>英文译文</b> 列。</div></template>
+                        </el-upload>
+                    </el-card>
+                </el-col>
+            </el-row>
+            
+            <!-- 最近添加的标语展示区 -->
+            <el-card shadow="never" style="margin-top: 20px;">
+                <template #header><b>👀 本次运行最近录入/导入的标语 (Top 10)</b></template>
+                <el-table :data="recentAdditions" style="width: 100%" size="small" stripe>
+                    <el-table-column prop="zh_term" label="中文标语" min-width="200"></el-table-column>
+                    <el-table-column prop="en_translation" label="英文译文" min-width="200"></el-table-column>
+                    <el-table-column prop="category" label="分类" width="120">
+                        <template #default="scope">
+                            <el-tag :type="getCategoryType(scope.row.category)" size="small">{{ scope.row.category }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="action_type" label="途径" width="100"></el-table-column>
+                </el-table>
+            </el-card>
+        </el-tab-pane>
+
+        <!-- Tab 3: 历史操作日志 -->
+        <el-tab-pane label="🕒 历史记录与导出">
+            <el-card shadow="never">
+                <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+                    <el-select v-model="historyFilterCategory" placeholder="全部分类" style="width: 150px" @change="fetchHistory" clearable>
+                        <el-option label="提示类" value="提示类"></el-option>
+                        <el-option label="强制类" value="强制类"></el-option>
+                        <el-option label="限制类" value="限制类"></el-option>
+                        <el-option label="指示类" value="指示类"></el-option>
+                    </el-select>
+                    <el-button type="success" @click="exportHistory">⬇️ 导出当前列表为 Excel</el-button>
+                    <el-button type="default" @click="fetchHistory">刷新</el-button>
+                </div>
+                
+                <el-table :data="historyData" style="width: 100%" height="500" stripe>
+                    <el-table-column prop="created_at" label="操作时间" width="200">
+                        <template #default="scope">{{ formatDate(scope.row.created_at) }}</template>
+                    </el-table-column>
+                    <el-table-column prop="action_type" label="操作类型" width="100">
+                        <template #default="scope">
+                            <el-tag :type="scope.row.action_type === '编辑' ? 'warning' : 'success'">{{ scope.row.action_type }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column prop="zh_term" label="中文原文" min-width="200"></el-table-column>
+                    <el-table-column prop="en_translation" label="新英文译文" min-width="200"></el-table-column>
+                    <el-table-column prop="category" label="分类" width="100"></el-table-column>
+                </el-table>
+            </el-card>
+        </el-tab-pane>
+    </el-tabs>
+</div>
+
+<script>
+    const App = {
+        data() {
+            return {
+                searchKeyword: '', searchResults: [],
+                singleForm: { zh_text: '', en_text: '' },
+                isSubmitting: false,
+                recentAdditions: [],
+                historyData: [],
+                historyFilterCategory: ''
+            }
+        },
+        mounted() {
+            this.fetchRecentAdditions();
+            this.fetchHistory();
+        },
+        methods: {
+            handleSearch() {
+                if(!this.searchKeyword) return;
+                axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
+                    this.searchResults = res.data.data;
+                    if(this.searchResults.length === 0) ElementPlus.ElMessage.warning('未找到包含该关键词的标语');
+                });
+            },
+            copyText(text) {
+                if(navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(() => ElementPlus.ElMessage.success('已成功复制译文'));
+                } else {
+                    let t = document.createElement("textarea"); t.value = text;
+                    document.body.appendChild(t); t.select(); document.execCommand('copy');
+                    ElementPlus.ElMessage.success('已成功复制译文'); t.remove();
+                }
+            },
+            editTranslation(zh_text, old_en) {
+                ElementPlus.ElMessageBox.prompt(`修改【${zh_text}】的英文译文`, '编辑译文', {
+                    confirmButtonText: '保存', cancelButtonText: '取消', inputValue: old_en, inputType: 'textarea'
+                }).then(({ value }) => {
+                    const new_en = (value || "").trim();
+                    if (!new_en) return ElementPlus.ElMessage.warning('译文不能为空');
+                    if (new_en === old_en) return; 
+                    
+                    const fd = new FormData(); fd.append('zh_text', zh_text); fd.append('old_en', old_en); fd.append('new_en', new_en);
+                    axios.post('/api/edit_translation', fd).then(res => {
+                        if (res.data.status === 'success') {
+                            ElementPlus.ElMessage.success(res.data.msg);
+                            this.handleSearch(); this.fetchHistory();
+                        } else ElementPlus.ElMessage.error(res.data.msg);
+                    });
+                }).catch(() => {});
+            },
+            submitSingle() {
+                if(!this.singleForm.zh_text || !this.singleForm.en_text) return ElementPlus.ElMessage.warning('请填写中英文');
+                this.isSubmitting = true;
+                const fd = new FormData(); fd.append('zh_text', this.singleForm.zh_text); fd.append('en_text', this.singleForm.en_text);
+                axios.post('/api/add_single', fd).then(res => {
+                    ElementPlus.ElMessage.success(res.data.msg);
+                    this.singleForm.zh_text = ''; this.singleForm.en_text = '';
+                    this.fetchRecentAdditions(); this.fetchHistory();
+                }).finally(() => { this.isSubmitting = false; })
+            },
+            handleUploadSuccess(res) {
+                if(res.status === 'success') {
+                    ElementPlus.ElNotification({ title: '处理完毕', message: res.msg, type: 'success', duration: 0});
+                    this.fetchRecentAdditions(); this.fetchHistory();
+                } else ElementPlus.ElMessage.error(res.msg);
+            },
+            handleUploadError() { ElementPlus.ElMessage.error('上传文件失败，请检查网络'); },
+            
+            // 获取最新 10 条新增记录（展示在管理页下方）
+            fetchRecentAdditions() {
+                axios.get('/api/history', { params: { limit: 10 } }).then(res => {
+                    this.recentAdditions = res.data.data.filter(item => item.action_type === '新增' || item.action_type === '导入').slice(0, 10);
+                });
+            },
+            // 获取全量历史记录供历史表格使用
+            fetchHistory() {
+                axios.get('/api/history', { params: { category: this.historyFilterCategory, limit: 1000 } }).then(res => {
+                    this.historyData = res.data.data;
+                });
+            },
+            // 导出历史记录
+            exportHistory() {
+                const url = `/api/export_history?category=${encodeURIComponent(this.historyFilterCategory)}`;
+                window.location.href = url; // 触发浏览器下载
+            },
+            getCategoryType(cat) {
+                const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' };
+                return map[cat] || 'primary';
+            },
+            formatDate(dateStr) {
+                if(!dateStr) return '';
+                const d = new Date(dateStr);
+                return d.toLocaleString('zh-CN', { hour12: false });
+            }
+        }
+    };
+    Vue.createApp(App).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

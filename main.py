@@ -1,0 +1,182 @@
+from fastapi import FastAPI, Depends, UploadFile, File, Form
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+import pandas as pd
+import io
+import os
+from urllib.parse import quote
+
+from database import engine, Base, get_db
+from models import Signage, ActionHistory
+from utils import process_dataframe_pipeline, get_sort_key
+
+
+# 建立数据库表 (会自动识别并创建新建的 action_history 表)
+Base.metadata.create_all(bind=engine)
+app = FastAPI(title="公示语多语言词库系统")
+
+import sys
+
+def get_resource_path(relative_path):
+    """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的 exe 运行，资源在 _MEIPASS 临时目录下
+        base_path = sys._MEIPASS
+    else:
+        # 如果是正常 Python 脚本运行
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+@app.get("/")
+async def read_root():
+    """返回主页 UI"""
+    # 【关键修改】使用辅助函数获取路径
+    html_path = get_resource_path(os.path.join("templates", "index.html"))
+    return FileResponse(html_path)
+    return FileResponse(html_path)
+
+@app.get("/api/search")
+def search_signage(keyword: str = "", db: Session = Depends(get_db)):
+    """支持相关性排序、容错搜索（忽略换行和空格）"""
+    if not keyword.strip(): return {"data": []}
+    
+    # 1. 净化关键词和数据库字段 (忽略空格、回车、换行)
+    clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
+    db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
+    
+    matched = db.query(Signage).filter(db_zh_clean.like(f"%{clean_keyword}%")).all()
+    if not matched: return {"data": []}
+
+    seq_ids = [m.sequence_id for m in matched if m.sequence_id]
+    associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
+        
+    grouped = {}
+    for item in matched:
+        if item.zh_term not in grouped:
+            grouped[item.zh_term] = {
+                "zh_text": item.zh_term,
+                "category": item.category,
+                "translations": set(),
+                "seq_id": item.sequence_id,
+                "associated_items": [],
+                "show_assoc": False
+            }
+        grouped[item.zh_term]["translations"].add(item.en_translation)
+
+    all_associated_items = {item.id: item for item in associated}.values()
+    for zh, data in grouped.items():
+        data["translations"] = list(data["translations"])
+        if data["seq_id"]:
+            bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
+            bros.sort(key=lambda x: x.sequence_order or 0)
+            seen_bro_zh = set()
+            for b in bros:
+                if b.zh_term not in seen_bro_zh:
+                    data["associated_items"].append({
+                        "zh_text": b.zh_term, 
+                        "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term],
+                        "order": b.sequence_order
+                    })
+                    seen_bro_zh.add(b.zh_term)
+
+    result_list = list(grouped.values())
+    def relevance_sort(x):
+        zh = x["zh_text"]
+        clean_zh = zh.replace('\n', '').replace('\r', '').replace(' ', '')
+        is_exact = 0 if clean_zh == clean_keyword else 1
+        is_start = 0 if clean_zh.startswith(clean_keyword) else 1
+        return (is_exact, is_start, len(clean_zh), get_sort_key(zh))
+        
+    result_list.sort(key=relevance_sort)
+    return {"data": result_list}
+
+@app.post("/api/edit_translation")
+def edit_translation(zh_text: str = Form(...), old_en: str = Form(...), new_en: str = Form(...), db: Session = Depends(get_db)):
+    record = db.query(Signage).filter_by(zh_term=zh_text, en_translation=old_en).first()
+    if not record: return {"status": "error", "msg": "找不到原始译文记录，修改失败。"}
+    if db.query(Signage).filter_by(zh_term=zh_text, en_translation=new_en).first():
+         return {"status": "error", "msg": "该译文已存在！"}
+
+    record.en_translation = new_en
+    # 写入日志
+    db.add(ActionHistory(action_type="编辑", zh_term=zh_text, en_translation=new_en, category=record.category))
+    db.commit()
+    return {"status": "success", "msg": "译文修改成功！"}
+
+@app.post("/api/add_single")
+def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db)):
+    df = pd.DataFrame([{"公示语中文": zh_text, "英文译文": en_text}])
+    processed_list = process_dataframe_pipeline(df)
+    
+    added_count = 0
+    for item in processed_list:
+        if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+            db.add(Signage(
+                zh_term=item['zh_text'], en_translation=item['en_text'],
+                sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+            ))
+            # 写入日志
+            db.add(ActionHistory(action_type="新增", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+            added_count += 1
+    db.commit()
+    return {"status": "success", "msg": f"录入成功，受影响条数：{added_count}"}
+
+@app.post("/api/upload_excel")
+async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
+        if '公示语中文' not in df.columns or '英文译文' not in df.columns:
+            return {"status": "error", "msg": "Excel必须包含 '公示语中文' 和 '英文译文' 两列！"}
+            
+        processed_list = process_dataframe_pipeline(df)
+        added_count, skip_count = 0, 0
+        for item in processed_list:
+            if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+                db.add(Signage(
+                    zh_term=item['zh_text'], en_translation=item['en_text'],
+                    sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+                ))
+                # 写入日志
+                db.add(ActionHistory(action_type="导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+                added_count += 1
+            else:
+                skip_count += 1
+        db.commit()
+        return {"status": "success", "msg": f"解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"}
+    except Exception as e:
+        return {"status": "error", "msg": str(e)}
+
+@app.get("/api/history")
+def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db)):
+    """获取历史操作记录"""
+    query = db.query(ActionHistory)
+    if category: query = query.filter(ActionHistory.category == category)
+    records = query.order_by(ActionHistory.created_at.desc()).limit(limit).all()
+    return {"data": records}
+
+@app.get("/api/export_history")
+def export_history(category: str = "", db: Session = Depends(get_db)):
+    """将过滤后的历史记录导出为 Excel"""
+    query = db.query(ActionHistory)
+    if category: query = query.filter(ActionHistory.category == category)
+    records = query.order_by(ActionHistory.created_at.desc()).all()
+    
+    data = [{
+        "操作类型": r.action_type, "公示语中文": r.zh_term, "英文译文": r.en_translation,
+        "公示语分类": r.category, "操作时间": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""
+    } for r in records]
+    
+    df = pd.DataFrame(data)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='历史记录')
+    output.seek(0)
+    
+    filename = quote("词库新增与编辑记录.xlsx")
+    return StreamingResponse(
+        output, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{filename}"}
+    )
