@@ -13,18 +13,7 @@
         .box-card { margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); }
         .search-bar { max-width: 600px; margin: 0 auto 30px auto; display: flex; align-items: flex-end; gap: 10px; }
         .translation-row { display: flex; align-items: center; margin-bottom: 10px; }
-        .translation-tag { font-size: 15px;
-            font-weight: 500;
-            margin-right: 15px;
-            margin-bottom: 5px;
-            white-space: pre-wrap;       
-            word-break: break-word;      
-            height: auto !important;     
-            padding: 8px 12px !important;
-            line-height: 1.5 !important; 
-            border-radius: 8px !important;
-            display: inline-block;       
-        }
+        .translation-tag { font-size: 15px; font-weight: 500; margin-right: 15px; margin-bottom: 5px; white-space: pre-wrap; word-break: break-word; height: auto !important; padding: 8px 12px !important; line-height: 1.5 !important; border-radius: 8px !important; display: inline-block; }
         .action-btns { opacity: 0.6; transition: opacity 0.3s; }
         .translation-row:hover .action-btns { opacity: 1; }
         .asso-container { margin-top: 15px; border-top: 1px dashed #ebeef5; padding-top: 10px; }
@@ -34,6 +23,8 @@
         .asso-zh { font-weight: bold; color: #606266; font-size: 14px; white-space: pre-wrap; }
         .asso-en { color: #8c939d; font-size: 13px; text-align: right; max-width: 60%; word-break: break-word; }
         .zh-title { font-size: 18px; font-weight: bold; color: #303133; white-space: pre-wrap; }
+        /* 进度条动画包裹 */
+        .progress-wrapper { margin-top: 15px; background: #fff; padding: 10px; border-radius: 8px; }
     </style>
 </head>
 <body>
@@ -108,7 +99,7 @@
                 <el-col :span="12">
                     <el-card shadow="hover">
                         <template #header><b>📂 批量文件上传 (Excel / Word)</b></template>
-                        <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx">
+                        <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx" :disabled="uploading">
                             <div class="el-upload__text">拖拽 Excel 或 Word 到此处，或 <em>点击上传</em></div>
                             <template #tip>
                                 <div class="el-upload__tip" style="line-height: 1.6;">
@@ -117,6 +108,20 @@
                                 </div>
                             </template>
                         </el-upload>
+                        
+                        <div v-if="uploading" class="progress-wrapper">
+                            <el-progress 
+                                :percentage="uploadPercent" 
+                                :text-inside="true" 
+                                :stroke-width="18" 
+                                :status="uploadPercent === 100 ? 'success' : ''"
+                                striped striped-flow>
+                            </el-progress>
+                            <div style="text-align: center; margin-top: 8px; color: #606266; font-size: 13px;">
+                                <i :class="uploadPercent === 100 ? 'el-icon-loading' : ''"></i>
+                                {{ uploadStatusText }}
+                            </div>
+                        </div>
                     </el-card>
                 </el-col>
             </el-row>
@@ -176,7 +181,11 @@
                 isSubmitting: false,
                 recentAdditions: [],
                 historyData: [],
-                historyFilterCategory: ''
+                historyFilterCategory: '',
+                // 进度条相关状态
+                uploading: false,
+                uploadPercent: 0,
+                uploadStatusText: ''
             }
         },
         mounted() {
@@ -228,7 +237,7 @@
                 }).finally(() => { this.isSubmitting = false; })
             },
             
-            // 【重要修改】自定义上传逻辑，智能分发给不同接口
+            // 包含进度条监听的上传逻辑
             customUpload(options) {
                 const file = options.file;
                 const extension = file.name.split('.').pop().toLowerCase();
@@ -246,8 +255,23 @@
                     return;
                 }
 
+                // 启动进度条显示
+                this.uploading = true;
+                this.uploadPercent = 0;
+                this.uploadStatusText = '正在上传文件至服务器...';
+
                 axios.post(url, formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' }
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                    onUploadProgress: progressEvent => {
+                        if (progressEvent.lengthComputable) {
+                            // 计算进度百分比
+                            let percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+                            this.uploadPercent = percent;
+                            if (percent === 100) {
+                                this.uploadStatusText = '上传完成！云端正在执行清洗、侦测与分类，请稍候...';
+                            }
+                        }
+                    }
                 }).then(res => {
                     if (res.data.status === 'success') {
                         ElementPlus.ElNotification({ title: '处理完毕', message: res.data.msg, type: 'success', duration: 0});
@@ -259,14 +283,18 @@
                         options.onError();
                     }
                 }).catch(err => {
-                    ElementPlus.ElMessage.error('上传文件失败，请检查网络');
+                    ElementPlus.ElMessage.error('上传或解析文件失败，请检查网络和文档格式');
                     options.onError();
+                }).finally(() => {
+                    // 无论成功失败，操作结束后关闭进度条状态
+                    setTimeout(() => {
+                        this.uploading = false;
+                    }, 1000); // 稍微延迟1秒让用户看到完成状态
                 });
             },
 
             fetchRecentAdditions() {
                 axios.get('/api/history', { params: { limit: 10 } }).then(res => {
-                    // 放宽条件，只要不是"编辑"就认为是新增的数据源
                     this.recentAdditions = res.data.data.filter(item => item.action_type !== '编辑').slice(0, 10);
                 });
             },
