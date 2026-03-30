@@ -22,7 +22,7 @@
         .asso-item:last-child { border-bottom: none; }
         .asso-zh { font-weight: bold; color: #606266; font-size: 14px; white-space: pre-wrap; }
         .asso-en { color: #8c939d; font-size: 13px; text-align: right; max-width: 60%; word-break: break-word; }
-        .zh-title { font-size: 18px; font-weight: bold; color: #303133; white-space: pre-wrap; }
+        .zh-title { font-size: 18px; font-weight: bold; color: #303133; white-space: pre-wrap; vertical-align: middle; }
         .progress-wrapper { margin-top: 15px; background: #fff; padding: 10px; border-radius: 8px; }
     </style>
 </head>
@@ -36,10 +36,10 @@
                 <el-input 
                     type="textarea" :autosize="{ minRows: 1, maxRows: 4 }" 
                     v-model="searchKeyword" 
-                    placeholder="输入中文标语查询 (支持多行/换行/粘贴格式)" 
+                    placeholder="输入中文标语进行检索，支持模糊错字与智能联想匹配..." 
                     @keydown.enter.prevent="handleSearch" style="flex: 1;">
                 </el-input>
-                <el-button @click="handleSearch" type="primary" style="height: 32px;">搜索</el-button>
+                <el-button @click="handleSearch" type="primary" style="height: 32px;">模糊搜索</el-button>
             </div>
 
             <el-empty v-if="searchResults.length === 0" description="暂无搜索结果"></el-empty>
@@ -47,7 +47,9 @@
             <el-card class="box-card" v-for="item in searchResults" :key="item.zh_text">
                 <template #header>
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span class="zh-title">{{ item.zh_text }}</span>
+                        <div>
+                            <span class="zh-title">{{ item.zh_text }}</span>
+                        </div>
                         <el-tag :type="getCategoryType(item.category)" effect="light" round>{{ item.category }}</el-tag>
                     </div>
                 </template>
@@ -79,7 +81,7 @@
 
         <el-tab-pane label="📝 文档比对">
             <el-card shadow="hover" style="margin-bottom: 20px;">
-                <template #header><b>上传 Word 文档进行词库比对</b></template>
+                <template #header><b>上传 Word 文档进行词库精确比对</b></template>
                 <el-upload drag action="" :http-request="matchUpload" :show-file-list="false" accept=".docx, .doc" :disabled="isMatching">
                     <div class="el-upload__text">拖拽 Word (.docx) 到此处，或 <em>点击上传</em></div>
                     <template #tip>
@@ -275,7 +277,6 @@
                 historyFilterCategory: '',
                 uploading: false, uploadPercent: 0, uploadStatusText: '',
                 
-                // 比对相关状态
                 isMatching: false, matchPercent: 0, matchStatusText: '', 
                 matchResults: [], hasMatched: false,
                 
@@ -292,7 +293,7 @@
                 if(!this.searchKeyword) return;
                 axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
                     this.searchResults = res.data.data;
-                    if(this.searchResults.length === 0) ElementPlus.ElMessage.warning('未找到包含该关键词的标语');
+                    if(this.searchResults.length === 0) ElementPlus.ElMessage.warning('未能匹配到结果，换个词试试？');
                 });
             },
             copyText(text) {
@@ -304,8 +305,6 @@
                     ElementPlus.ElMessage.success('已成功复制译文'); t.remove();
                 }
             },
-            
-            // 核心功能：前端局部无刷新响应修改，同时作用于搜索结果和比对结果
             editTranslation(zh_text, old_en) {
                 ElementPlus.ElMessageBox.prompt(`修改【${zh_text}】的英文译文`, '编辑译文', {
                     confirmButtonText: '保存', cancelButtonText: '取消', inputValue: old_en, inputType: 'textarea'
@@ -319,7 +318,6 @@
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
                             
-                            // 动态更新搜索页数据
                             this.searchResults.forEach(item => {
                                 if (item.zh_text === zh_text) {
                                     const idx = item.translations.indexOf(old_en);
@@ -327,7 +325,6 @@
                                 }
                             });
                             
-                            // 动态更新文档比对页数据
                             this.matchResults.forEach(item => {
                                 if (item.zh_text === zh_text) {
                                     const idx = item.translations.indexOf(old_en);
@@ -350,8 +347,6 @@
                     this.fetchRecentAdditions(); this.fetchHistory();
                 }).finally(() => { this.isSubmitting = false; })
             },
-            
-            // ================= 新增：文档词库比对 =================
             matchUpload(options) {
                 const file = options.file;
                 const extension = file.name.split('.').pop().toLowerCase();
@@ -395,7 +390,6 @@
                     setTimeout(() => { this.isMatching = false; }, 800); 
                 });
             },
-            
             customUpload(options) {
                 const file = options.file;
                 const extension = file.name.split('.').pop().toLowerCase();
