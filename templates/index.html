@@ -23,7 +23,6 @@
         .asso-zh { font-weight: bold; color: #606266; font-size: 14px; white-space: pre-wrap; }
         .asso-en { color: #8c939d; font-size: 13px; text-align: right; max-width: 60%; word-break: break-word; }
         .zh-title { font-size: 18px; font-weight: bold; color: #303133; white-space: pre-wrap; }
-        /* 进度条动画包裹 */
         .progress-wrapper { margin-top: 15px; background: #fff; padding: 10px; border-radius: 8px; }
     </style>
 </head>
@@ -99,12 +98,13 @@
                 <el-col :span="12">
                     <el-card shadow="hover">
                         <template #header><b>📂 批量文件上传 (Excel / Word)</b></template>
-                        <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx" :disabled="uploading">
+                        <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx, .doc" :disabled="uploading">
                             <div class="el-upload__text">拖拽 Excel 或 Word 到此处，或 <em>点击上传</em></div>
                             <template #tip>
                                 <div class="el-upload__tip" style="line-height: 1.6;">
                                     <b>Excel (.xlsx)</b>：需包含“公示语中文”和“英文译文”列。<br>
-                                    <b>Word (.docx)</b>：需包含“标识内容”和“整改建议”列的表格。
+                                    <b>Word (.docx)</b>：需包含“标识内容”和“整改建议”列的表格。<br>
+                                    <span style="color: #E6A23C;">*如遇到旧版 .doc 文件，请先另存为 .docx 格式。包含图片的文档会自动跳过图片。</span>
                                 </div>
                             </template>
                         </el-upload>
@@ -143,33 +143,67 @@
 
         <el-tab-pane label="🕒 历史记录与导出">
             <el-card shadow="never">
-                <div style="margin-bottom: 15px; display: flex; gap: 10px;">
-                    <el-select v-model="historyFilterCategory" placeholder="全部分类" style="width: 150px" @change="fetchHistory" clearable>
-                        <el-option label="提示类" value="提示类"></el-option>
-                        <el-option label="强制类" value="强制类"></el-option>
-                        <el-option label="限制类" value="限制类"></el-option>
-                        <el-option label="指示类" value="指示类"></el-option>
-                    </el-select>
-                    <el-button type="success" @click="exportHistory">⬇️ 导出当前列表为 Excel</el-button>
-                    <el-button type="default" @click="fetchHistory">刷新</el-button>
+                <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; gap: 10px;">
+                        <el-select v-model="historyFilterCategory" placeholder="全部分类" style="width: 150px" @change="fetchHistory" clearable>
+                            <el-option label="提示类" value="提示类"></el-option>
+                            <el-option label="强制类" value="强制类"></el-option>
+                            <el-option label="限制类" value="限制类"></el-option>
+                            <el-option label="指示类" value="指示类"></el-option>
+                        </el-select>
+                        <el-button type="success" @click="exportHistory">⬇️ 导出当前列表为 Excel</el-button>
+                        <el-button type="default" @click="fetchHistory">刷新</el-button>
+                    </div>
+                    <div style="color: #909399; font-size: 13px;">* 在此处的修改和删除，将同步影响词库中的最终数据。</div>
                 </div>
                 
                 <el-table :data="historyData" style="width: 100%" height="500" stripe>
-                    <el-table-column prop="created_at" label="操作时间" width="200">
+                    <el-table-column prop="created_at" label="操作时间" width="160">
                         <template #default="scope">{{ formatDate(scope.row.created_at) }}</template>
                     </el-table-column>
-                    <el-table-column prop="action_type" label="操作类型" width="100">
+                    <el-table-column prop="action_type" label="操作类型" width="90">
                         <template #default="scope">
-                            <el-tag :type="scope.row.action_type === '编辑' ? 'warning' : 'success'">{{ scope.row.action_type }}</el-tag>
+                            <el-tag :type="scope.row.action_type.includes('修改') ? 'warning' : 'success'">{{ scope.row.action_type }}</el-tag>
                         </template>
                     </el-table-column>
-                    <el-table-column prop="zh_term" label="中文原文" min-width="200"></el-table-column>
-                    <el-table-column prop="en_translation" label="新英文译文" min-width="200"></el-table-column>
-                    <el-table-column prop="category" label="分类" width="100"></el-table-column>
+                    <el-table-column prop="zh_term" label="中文原文" min-width="180"></el-table-column>
+                    <el-table-column prop="en_translation" label="英文译文" min-width="180"></el-table-column>
+                    <el-table-column prop="category" label="分类" width="90"></el-table-column>
+                    <el-table-column label="操作" width="120" fixed="right" align="center">
+                        <template #default="scope">
+                            <el-button size="small" type="primary" link @click="openEditDialog(scope.row)">编辑</el-button>
+                            <el-button size="small" type="danger" link @click="deleteHistoryRecord(scope.row)">删除</el-button>
+                        </template>
+                    </el-table-column>
                 </el-table>
             </el-card>
         </el-tab-pane>
     </el-tabs>
+
+    <el-dialog title="编辑词条信息" v-model="editDialogVisible" width="500px">
+        <el-form :model="editForm" label-width="80px">
+            <el-form-item label="中文标语">
+                <el-input v-model="editForm.zh_term" type="textarea" :rows="2"></el-input>
+            </el-form-item>
+            <el-form-item label="英文译文">
+                <el-input v-model="editForm.en_translation" type="textarea" :rows="2"></el-input>
+            </el-form-item>
+            <el-form-item label="词条分类">
+                <el-select v-model="editForm.category" style="width: 100%;">
+                    <el-option label="提示类" value="提示类"></el-option>
+                    <el-option label="强制类" value="强制类"></el-option>
+                    <el-option label="限制类" value="限制类"></el-option>
+                    <el-option label="指示类" value="指示类"></el-option>
+                </el-select>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <span class="dialog-footer">
+                <el-button @click="editDialogVisible = false">取消</el-button>
+                <el-button type="primary" @click="submitHistoryEdit" :loading="isEditingRecord">保存修改</el-button>
+            </span>
+        </template>
+    </el-dialog>
 </div>
 
 <script>
@@ -182,10 +216,14 @@
                 recentAdditions: [],
                 historyData: [],
                 historyFilterCategory: '',
-                // 进度条相关状态
                 uploading: false,
                 uploadPercent: 0,
-                uploadStatusText: ''
+                uploadStatusText: '',
+                
+                // 行内编辑相关状态
+                editDialogVisible: false,
+                isEditingRecord: false,
+                editForm: { id: null, zh_term: '', en_translation: '', category: '' }
             }
         },
         mounted() {
@@ -237,10 +275,20 @@
                 }).finally(() => { this.isSubmitting = false; })
             },
             
-            // 包含进度条监听的上传逻辑
             customUpload(options) {
                 const file = options.file;
                 const extension = file.name.split('.').pop().toLowerCase();
+                
+                if (extension === 'doc') {
+                    ElementPlus.ElMessage.warning({
+                        message: '提示：系统检测到旧版 .doc 文件。为确保标语解析准确率，请先用 Word 软件将其“另存为” .docx 格式后再上传！',
+                        duration: 5000,
+                        showClose: true
+                    });
+                    options.onError();
+                    return;
+                }
+
                 const formData = new FormData();
                 formData.append('file', file);
 
@@ -255,7 +303,6 @@
                     return;
                 }
 
-                // 启动进度条显示
                 this.uploading = true;
                 this.uploadPercent = 0;
                 this.uploadStatusText = '正在上传文件至服务器...';
@@ -264,7 +311,6 @@
                     headers: { 'Content-Type': 'multipart/form-data' },
                     onUploadProgress: progressEvent => {
                         if (progressEvent.lengthComputable) {
-                            // 计算进度百分比
                             let percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
                             this.uploadPercent = percent;
                             if (percent === 100) {
@@ -286,22 +332,64 @@
                     ElementPlus.ElMessage.error('上传或解析文件失败，请检查网络和文档格式');
                     options.onError();
                 }).finally(() => {
-                    // 无论成功失败，操作结束后关闭进度条状态
-                    setTimeout(() => {
-                        this.uploading = false;
-                    }, 1000); // 稍微延迟1秒让用户看到完成状态
+                    setTimeout(() => { this.uploading = false; }, 1000); 
                 });
             },
 
+            // ================= 历史记录与编辑管理 =================
             fetchRecentAdditions() {
                 axios.get('/api/history', { params: { limit: 10 } }).then(res => {
-                    this.recentAdditions = res.data.data.filter(item => item.action_type !== '编辑').slice(0, 10);
+                    this.recentAdditions = res.data.data.filter(item => item.action_type !== '记录修改' && item.action_type !== '编辑').slice(0, 10);
                 });
             },
             fetchHistory() {
                 axios.get('/api/history', { params: { category: this.historyFilterCategory, limit: 1000 } }).then(res => {
                     this.historyData = res.data.data;
                 });
+            },
+            openEditDialog(row) {
+                this.editForm = { id: row.id, zh_term: row.zh_term, en_translation: row.en_translation, category: row.category };
+                this.editDialogVisible = true;
+            },
+            submitHistoryEdit() {
+                if(!this.editForm.zh_term || !this.editForm.en_translation) return ElementPlus.ElMessage.warning('中文或英文内容不能为空！');
+                this.isEditingRecord = true;
+                
+                const fd = new FormData();
+                fd.append('id', this.editForm.id);
+                fd.append('zh_term', this.editForm.zh_term);
+                fd.append('en_translation', this.editForm.en_translation);
+                fd.append('category', this.editForm.category);
+                
+                axios.post('/api/history/update', fd).then(res => {
+                    if(res.data.status === 'success') {
+                        ElementPlus.ElMessage.success(res.data.msg);
+                        this.editDialogVisible = false;
+                        this.fetchHistory();
+                        this.fetchRecentAdditions();
+                    } else {
+                        ElementPlus.ElMessage.error(res.data.msg);
+                    }
+                }).finally(() => { this.isEditingRecord = false; });
+            },
+            deleteHistoryRecord(row) {
+                ElementPlus.ElMessageBox.confirm(
+                    `您即将删除【${row.zh_term}】这条记录。确认删除后，词库中的对应数据也将一并清除！是否继续？`, 
+                    '危险操作警告', 
+                    { confirmButtonText: '确定永久删除', cancelButtonText: '取消', type: 'error' }
+                ).then(() => {
+                    const fd = new FormData();
+                    fd.append('id', row.id);
+                    axios.post('/api/history/delete', fd).then(res => {
+                        if(res.data.status === 'success') {
+                            ElementPlus.ElMessage.success(res.data.msg);
+                            this.fetchHistory();
+                            this.fetchRecentAdditions();
+                        } else {
+                            ElementPlus.ElMessage.error(res.data.msg);
+                        }
+                    });
+                }).catch(() => {});
             },
             exportHistory() {
                 const url = `/api/export_history?category=${encodeURIComponent(this.historyFilterCategory)}`;
