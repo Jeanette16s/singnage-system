@@ -14,17 +14,15 @@ from database import engine, Base, get_db
 from models import Signage, ActionHistory
 from utils import process_dataframe_pipeline, get_sort_key
 
-# 建立数据库表 (会自动识别并创建新建的 action_history 表)
+# 建立数据库表
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="公示语多语言词库系统")
 
 def get_resource_path(relative_path):
-    """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
+    """获取资源的绝对路径"""
     if getattr(sys, 'frozen', False):
-        # 如果是打包后的 exe 运行，资源在 _MEIPASS 临时目录下
         base_path = sys._MEIPASS
     else:
-        # 如果是正常 Python 脚本运行
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
@@ -32,14 +30,11 @@ def get_resource_path(relative_path):
 
 def extract_zh_sign(text: str) -> str:
     """提取标识内容（纯中文部分）"""
-    if not text:
-        return ""
+    if not text: return ""
     text = text.replace("：", ":")
-    if "英文:" in text:
-        text = text.split("英文:")[0]
+    if "英文:" in text: text = text.split("英文:")[0]
     text = text.replace("中文:", "").strip()
     
-    # 处理中英文无缝粘连或同行的特殊情况
     if re.search(r'[\u4e00-\u9fa5]', text):
         match = re.search(r'[A-Za-z][^\u4e00-\u9fa5]*$', text)
         if match:
@@ -50,19 +45,16 @@ def extract_zh_sign(text: str) -> str:
 
 def extract_en_suggestion(text: str) -> str:
     """提取整改建议（纯英文部分）"""
-    if not text:
-        return ""
+    if not text: return ""
     text = text.replace("：", ":")
-    if "英文:" in text:
-        return text.split("英文:")[1].strip()
+    if "英文:" in text: return text.split("英文:")[1].strip()
         
     lines = text.split('\n')
     en_lines = []
     for line in lines:
         if re.search(r'[A-Za-z]', line) and not re.search(r'[\u4e00-\u9fa5]', line):
             en_lines.append(line.strip())
-    if en_lines:
-        return "\n".join(en_lines)
+    if en_lines: return "\n".join(en_lines)
         
     match = re.search(r'[A-Za-z][^\u4e00-\u9fa5]*$', text)
     if match:
@@ -77,16 +69,13 @@ def extract_en_suggestion(text: str) -> str:
 
 @app.get("/")
 async def read_root():
-    """返回主页 UI"""
     html_path = get_resource_path(os.path.join("templates", "index.html"))
     return FileResponse(html_path)
 
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db)):
-    """支持相关性排序、容错搜索（忽略换行和空格）"""
     if not keyword.strip(): return {"data": []}
     
-    # 1. 净化关键词和数据库字段 (忽略空格、回车、换行)
     clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
     db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
     
@@ -100,12 +89,9 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db)):
     for item in matched:
         if item.zh_term not in grouped:
             grouped[item.zh_term] = {
-                "zh_text": item.zh_term,
-                "category": item.category,
-                "translations": set(),
-                "seq_id": item.sequence_id,
-                "associated_items": [],
-                "show_assoc": False
+                "zh_text": item.zh_term, "category": item.category,
+                "translations": set(), "seq_id": item.sequence_id,
+                "associated_items": [], "show_assoc": False
             }
         grouped[item.zh_term]["translations"].add(item.en_translation)
 
@@ -144,7 +130,6 @@ def edit_translation(zh_text: str = Form(...), old_en: str = Form(...), new_en: 
          return {"status": "error", "msg": "该译文已存在！"}
 
     record.en_translation = new_en
-    # 写入日志
     db.add(ActionHistory(action_type="编辑", zh_term=zh_text, en_translation=new_en, category=record.category))
     db.commit()
     return {"status": "success", "msg": "译文修改成功！"}
@@ -157,11 +142,14 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
     added_count = 0
     for item in processed_list:
         if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+            # 解决 NaN 问题：强制转换为 None
+            seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
+            seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
+            
             db.add(Signage(
                 zh_term=item['zh_text'], en_translation=item['en_text'],
-                sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+                sequence_id=seq_id, sequence_order=seq_order, category=item['category']
             ))
-            # 写入日志
             db.add(ActionHistory(action_type="新增", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
             added_count += 1
     db.commit()
@@ -179,11 +167,14 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         added_count, skip_count = 0, 0
         for item in processed_list:
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+                # 解决 NaN 问题
+                seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
+                seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
+                
                 db.add(Signage(
                     zh_term=item['zh_text'], en_translation=item['en_text'],
-                    sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+                    sequence_id=seq_id, sequence_order=seq_order, category=item['category']
                 ))
-                # 写入日志
                 db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
                 added_count += 1
             else:
@@ -195,7 +186,6 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
 
 @app.post("/api/upload_docx")
 async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """处理 Word 文档的上传与解析"""
     if not file.filename.endswith('.docx'):
         return {"status": "error", "msg": "请上传 .docx 格式的 Word 文档！"}
 
@@ -206,14 +196,9 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
         return {"status": "error", "msg": f"读取 Word 文档失败: {e}"}
 
     extracted_data = []
-
-    # 遍历所有表格进行解析
     for table in doc.tables:
-        if len(table.rows) == 0:
-            continue
-            
+        if len(table.rows) == 0: continue
         header_row = [cell.text.strip() for cell in table.rows[0].cells]
-        
         try:
             sign_col_idx = header_row.index("标识内容")
             suggestion_col_idx = header_row.index("整改建议")
@@ -221,41 +206,34 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
             continue
 
         for row in table.rows[1:]:
-            if len(row.cells) <= max(sign_col_idx, suggestion_col_idx):
-                continue
-                
+            if len(row.cells) <= max(sign_col_idx, suggestion_col_idx): continue
             raw_sign = row.cells[sign_col_idx].text.strip()
             raw_suggestion = row.cells[suggestion_col_idx].text.strip()
-            
-            if not raw_sign and not raw_suggestion:
-                continue
+            if not raw_sign and not raw_suggestion: continue
                 
             clean_zh = extract_zh_sign(raw_sign)
             clean_en = extract_en_suggestion(raw_suggestion)
-            
-            # 只有当提取出有效的中文和英文时才加入列表
             if clean_zh and clean_en:
-                extracted_data.append({
-                    "公示语中文": clean_zh,
-                    "英文译文": clean_en
-                })
+                extracted_data.append({"公示语中文": clean_zh, "英文译文": clean_en})
 
     if not extracted_data:
         return {"status": "error", "msg": "未能在文档中提取到有效的标语数据，请检查表格是否包含'标识内容'和'整改建议'列。"}
 
     try:
-        # 将列表转换为 DataFrame，完美复用之前的处理管道
         df = pd.DataFrame(extracted_data)
         processed_list = process_dataframe_pipeline(df)
         
         added_count, skip_count = 0, 0
         for item in processed_list:
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+                # 解决 NaN 问题
+                seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
+                seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
+                
                 db.add(Signage(
                     zh_term=item['zh_text'], en_translation=item['en_text'],
-                    sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+                    sequence_id=seq_id, sequence_order=seq_order, category=item['category']
                 ))
-                # 写入日志
                 db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
                 added_count += 1
             else:
@@ -267,7 +245,6 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
 
 @app.get("/api/history")
 def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db)):
-    """获取历史操作记录"""
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
     records = query.order_by(ActionHistory.created_at.desc()).limit(limit).all()
@@ -275,7 +252,6 @@ def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_
 
 @app.get("/api/export_history")
 def export_history(category: str = "", db: Session = Depends(get_db)):
-    """将过滤后的历史记录导出为 Excel"""
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
     records = query.order_by(ActionHistory.created_at.desc()).all()
