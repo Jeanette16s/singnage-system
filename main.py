@@ -5,18 +5,18 @@ from sqlalchemy import func
 import pandas as pd
 import io
 import os
+import sys
+import re
+import docx
 from urllib.parse import quote
 
 from database import engine, Base, get_db
 from models import Signage, ActionHistory
 from utils import process_dataframe_pipeline, get_sort_key
 
-
 # 建立数据库表 (会自动识别并创建新建的 action_history 表)
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="公示语多语言词库系统")
-
-import sys
 
 def get_resource_path(relative_path):
     """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包环境"""
@@ -28,12 +28,57 @@ def get_resource_path(relative_path):
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
+# ================= 工具函数：Word 文本提取 =================
+
+def extract_zh_sign(text: str) -> str:
+    """提取标识内容（纯中文部分）"""
+    if not text:
+        return ""
+    text = text.replace("：", ":")
+    if "英文:" in text:
+        text = text.split("英文:")[0]
+    text = text.replace("中文:", "").strip()
+    
+    # 处理中英文无缝粘连或同行的特殊情况
+    if re.search(r'[\u4e00-\u9fa5]', text):
+        match = re.search(r'[A-Za-z][^\u4e00-\u9fa5]*$', text)
+        if match:
+            eng_part = match.group(0)
+            if re.search(r'[A-Za-z]{2,}', eng_part) or len(re.findall(r'[A-Za-z]', eng_part)) > 2:
+                text = text[:match.start()]
+    return text.strip()
+
+def extract_en_suggestion(text: str) -> str:
+    """提取整改建议（纯英文部分）"""
+    if not text:
+        return ""
+    text = text.replace("：", ":")
+    if "英文:" in text:
+        return text.split("英文:")[1].strip()
+        
+    lines = text.split('\n')
+    en_lines = []
+    for line in lines:
+        if re.search(r'[A-Za-z]', line) and not re.search(r'[\u4e00-\u9fa5]', line):
+            en_lines.append(line.strip())
+    if en_lines:
+        return "\n".join(en_lines)
+        
+    match = re.search(r'[A-Za-z][^\u4e00-\u9fa5]*$', text)
+    if match:
+        eng_part = match.group(0)
+        if re.search(r'[A-Za-z]{2,}', eng_part) or len(re.findall(r'[A-Za-z]', eng_part)) > 2:
+            return eng_part.strip()
+        
+    cleaned = re.sub(r'[\u4e00-\u9fa5：，。！？、\n]+', ' ', text)
+    return cleaned.strip()
+
+# ================= 核心路由接口 =================
+
 @app.get("/")
 async def read_root():
     """返回主页 UI"""
-    # 【关键修改】使用辅助函数获取路径
     html_path = get_resource_path(os.path.join("templates", "index.html"))
-    return FileResponse(html_path)
     return FileResponse(html_path)
 
 @app.get("/api/search")
@@ -139,7 +184,7 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
                     sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
                 ))
                 # 写入日志
-                db.add(ActionHistory(action_type="导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+                db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
                 added_count += 1
             else:
                 skip_count += 1
@@ -147,6 +192,78 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         return {"status": "success", "msg": f"解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"}
     except Exception as e:
         return {"status": "error", "msg": str(e)}
+
+@app.post("/api/upload_docx")
+async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """处理 Word 文档的上传与解析"""
+    if not file.filename.endswith('.docx'):
+        return {"status": "error", "msg": "请上传 .docx 格式的 Word 文档！"}
+
+    contents = await file.read()
+    try:
+        doc = docx.Document(io.BytesIO(contents))
+    except Exception as e:
+        return {"status": "error", "msg": f"读取 Word 文档失败: {e}"}
+
+    extracted_data = []
+
+    # 遍历所有表格进行解析
+    for table in doc.tables:
+        if len(table.rows) == 0:
+            continue
+            
+        header_row = [cell.text.strip() for cell in table.rows[0].cells]
+        
+        try:
+            sign_col_idx = header_row.index("标识内容")
+            suggestion_col_idx = header_row.index("整改建议")
+        except ValueError:
+            continue
+
+        for row in table.rows[1:]:
+            if len(row.cells) <= max(sign_col_idx, suggestion_col_idx):
+                continue
+                
+            raw_sign = row.cells[sign_col_idx].text.strip()
+            raw_suggestion = row.cells[suggestion_col_idx].text.strip()
+            
+            if not raw_sign and not raw_suggestion:
+                continue
+                
+            clean_zh = extract_zh_sign(raw_sign)
+            clean_en = extract_en_suggestion(raw_suggestion)
+            
+            # 只有当提取出有效的中文和英文时才加入列表
+            if clean_zh and clean_en:
+                extracted_data.append({
+                    "公示语中文": clean_zh,
+                    "英文译文": clean_en
+                })
+
+    if not extracted_data:
+        return {"status": "error", "msg": "未能在文档中提取到有效的标语数据，请检查表格是否包含'标识内容'和'整改建议'列。"}
+
+    try:
+        # 将列表转换为 DataFrame，完美复用之前的处理管道
+        df = pd.DataFrame(extracted_data)
+        processed_list = process_dataframe_pipeline(df)
+        
+        added_count, skip_count = 0, 0
+        for item in processed_list:
+            if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+                db.add(Signage(
+                    zh_term=item['zh_text'], en_translation=item['en_text'],
+                    sequence_id=item['seq_id'], sequence_order=item['seq_order'], category=item['category']
+                ))
+                # 写入日志
+                db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+                added_count += 1
+            else:
+                skip_count += 1
+        db.commit()
+        return {"status": "success", "msg": f"Word 解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"}
+    except Exception as e:
+        return {"status": "error", "msg": f"数据处理过程中发生错误: {str(e)}"}
 
 @app.get("/api/history")
 def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db)):
