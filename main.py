@@ -208,14 +208,12 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
         for row in table.rows[1:]:
             if len(row.cells) <= max(sign_col_idx, suggestion_col_idx): continue
             
-            # 【核心修复】：增加异常捕捉和长度暴力拦截，避免图片Base64卡死服务器
             try:
                 raw_sign = row.cells[sign_col_idx].text.strip()
                 raw_suggestion = row.cells[suggestion_col_idx].text.strip()
             except Exception:
-                continue # 如果读取单元格出错（例如复杂的OLE对象），直接跳过
+                continue 
                 
-            # 如果文本长度超过 1000 字符，通常是误读了图片或乱码文件，直接无视它
             if len(raw_sign) > 1000 or len(raw_suggestion) > 1000:
                 continue
                 
@@ -252,6 +250,94 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
     except Exception as e:
         return {"status": "error", "msg": f"数据处理过程中发生错误: {str(e)}"}
 
+# ================= 新增：文档词库比对接口 =================
+
+@app.post("/api/match_docx")
+async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """仅提取 Word 中的中文并去词库中比对"""
+    if file.filename.endswith('.doc'):
+        return {"status": "error", "msg": "不支持旧版 .doc 格式，请另存为 .docx 格式后重试！"}
+    elif not file.filename.endswith('.docx'):
+        return {"status": "error", "msg": "请上传 .docx 格式的 Word 文档！"}
+
+    contents = await file.read()
+    try:
+        doc = docx.Document(io.BytesIO(contents))
+    except Exception as e:
+        return {"status": "error", "msg": f"读取 Word 文档失败: {e}"}
+
+    extracted_zh_terms = set()
+    for table in doc.tables:
+        if len(table.rows) == 0: continue
+        header_row = [cell.text.strip() for cell in table.rows[0].cells]
+        try:
+            sign_col_idx = header_row.index("标识内容")
+        except ValueError:
+            continue
+
+        for row in table.rows[1:]:
+            if len(row.cells) <= sign_col_idx: continue
+            try:
+                raw_sign = row.cells[sign_col_idx].text.strip()
+            except Exception:
+                continue
+                
+            if len(raw_sign) > 1000 or not raw_sign:
+                continue
+                
+            clean_zh = extract_zh_sign(raw_sign)
+            if clean_zh:
+                extracted_zh_terms.add(clean_zh)
+
+    if not extracted_zh_terms:
+        return {"status": "error", "msg": "未能在文档中提取到有效的中文标识（请确保表格包含'标识内容'列）。"}
+
+    # 净化提取出来的词条（去空格回车），用于和数据库比对
+    clean_extracted = {term.replace('\n', '').replace('\r', '').replace(' ', '') for term in extracted_zh_terms}
+    
+    # 从数据库中精确比对（忽略空格回车）
+    db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
+    matched = db.query(Signage).filter(db_zh_clean.in_(clean_extracted)).all()
+
+    # 复用搜索结果的聚合逻辑
+    seq_ids = [m.sequence_id for m in matched if m.sequence_id]
+    associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
+        
+    grouped = {}
+    for item in matched:
+        if item.zh_term not in grouped:
+            grouped[item.zh_term] = {
+                "zh_text": item.zh_term, "category": item.category,
+                "translations": set(), "seq_id": item.sequence_id,
+                "associated_items": [], "show_assoc": False
+            }
+        grouped[item.zh_term]["translations"].add(item.en_translation)
+
+    all_associated_items = {item.id: item for item in associated}.values()
+    for zh, data in grouped.items():
+        data["translations"] = list(data["translations"])
+        if data["seq_id"]:
+            bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
+            bros.sort(key=lambda x: x.sequence_order or 0)
+            seen_bro_zh = set()
+            for b in bros:
+                if b.zh_term not in seen_bro_zh:
+                    data["associated_items"].append({
+                        "zh_text": b.zh_term, 
+                        "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term],
+                        "order": b.sequence_order
+                    })
+                    seen_bro_zh.add(b.zh_term)
+
+    result_list = list(grouped.values())
+    result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
+    
+    return {
+        "status": "success", 
+        "data": result_list, 
+        "extracted_count": len(extracted_zh_terms)
+    }
+
 # ================= 历史记录与管理接口 =================
 
 @app.get("/api/history")
@@ -263,21 +349,17 @@ def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_
 
 @app.post("/api/history/update")
 def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation: str = Form(...), category: str = Form(...), db: Session = Depends(get_db)):
-    """在历史记录中编辑，并同步更新主词库数据"""
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record:
         return {"status": "error", "msg": "找不到该条历史记录"}
 
-    # 尝试在主表里找到对应的那条标语并同步修改
     sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
     
-    # 更新历史记录自身
     record.zh_term = zh_term
     record.en_translation = en_translation
     record.category = category
     record.action_type = "记录修改"
     
-    # 更新主表词库
     if sign:
         sign.zh_term = zh_term
         sign.en_translation = en_translation
@@ -288,12 +370,10 @@ def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation
 
 @app.post("/api/history/delete")
 def delete_history(id: int = Form(...), db: Session = Depends(get_db)):
-    """删除历史记录，并同步从主词库中删除关联数据"""
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record:
         return {"status": "error", "msg": "找不到该条历史记录"}
 
-    # 同步删除主表中的数据
     sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
     if sign:
         db.delete(sign)
