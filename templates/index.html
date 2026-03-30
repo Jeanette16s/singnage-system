@@ -49,6 +49,9 @@
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
                             <span class="zh-title">{{ item.zh_text }}</span>
+                            <el-tag v-if="item.match_score" size="small" type="info" style="margin-left: 10px; border-radius: 12px;">
+                                匹配度: {{ item.match_score.toFixed(1) }}%
+                            </el-tag>
                         </div>
                         <el-tag :type="getCategoryType(item.category)" effect="light" round>{{ item.category }}</el-tag>
                     </div>
@@ -60,7 +63,7 @@
                             <el-tag class="translation-tag" size="large" effect="plain">{{ en }}</el-tag>
                             <div class="action-btns">
                                 <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
-                                <el-button size="small" type="warning" plain @click="editTranslation(item.zh_text, en)">编辑</el-button>
+                                <el-button size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
                             </div>
                         </div>
                     </div>
@@ -115,7 +118,7 @@
                                 <el-tag class="translation-tag" size="large" effect="plain">{{ en }}</el-tag>
                                 <div class="action-btns">
                                     <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
-                                    <el-button size="small" type="warning" plain @click="editTranslation(item.zh_text, en)">编辑</el-button>
+                                    <el-button size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
                                 </div>
                             </div>
                         </div>
@@ -222,7 +225,7 @@
                     </el-table-column>
                     <el-table-column prop="action_type" label="操作类型" width="90">
                         <template #default="scope">
-                            <el-tag :type="scope.row.action_type.includes('修改') ? 'warning' : 'success'">{{ scope.row.action_type }}</el-tag>
+                            <el-tag :type="scope.row.action_type.includes('修改') || scope.row.action_type.includes('编辑') ? 'warning' : 'success'">{{ scope.row.action_type }}</el-tag>
                         </template>
                     </el-table-column>
                     <el-table-column prop="zh_term" label="中文原文" min-width="180"></el-table-column>
@@ -230,7 +233,7 @@
                     <el-table-column prop="category" label="分类" width="90"></el-table-column>
                     <el-table-column label="操作" width="120" fixed="right" align="center">
                         <template #default="scope">
-                            <el-button size="small" type="primary" link @click="openEditDialog(scope.row)">编辑</el-button>
+                            <el-button size="small" type="primary" link @click="openHistoryEditDialog(scope.row)">编辑</el-button>
                             <el-button size="small" type="danger" link @click="deleteHistoryRecord(scope.row)">删除</el-button>
                         </template>
                     </el-table-column>
@@ -239,16 +242,42 @@
         </el-tab-pane>
     </el-tabs>
 
-    <el-dialog title="编辑词条信息" v-model="editDialogVisible" width="500px">
-        <el-form :model="editForm" label-width="80px">
+    <el-dialog title="修改词库条目" v-model="searchEditDialogVisible" width="500px">
+        <el-form :model="searchEditForm" label-width="80px">
             <el-form-item label="中文标语">
-                <el-input v-model="editForm.zh_term" type="textarea" :rows="2"></el-input>
+                <el-input v-model="searchEditForm.new_zh" type="textarea" :rows="2"></el-input>
             </el-form-item>
             <el-form-item label="英文译文">
-                <el-input v-model="editForm.en_translation" type="textarea" :rows="2"></el-input>
+                <el-input v-model="searchEditForm.new_en" type="textarea" :rows="2"></el-input>
             </el-form-item>
             <el-form-item label="词条分类">
-                <el-select v-model="editForm.category" style="width: 100%;">
+                <el-select v-model="searchEditForm.category" style="width: 100%;">
+                    <el-option label="提示类" value="提示类"></el-option>
+                    <el-option label="强制类" value="强制类"></el-option>
+                    <el-option label="限制类" value="限制类"></el-option>
+                    <el-option label="指示类" value="指示类"></el-option>
+                    <el-option label="未分类" value=""></el-option>
+                </el-select>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <span class="dialog-footer">
+                <el-button @click="searchEditDialogVisible = false">取消</el-button>
+                <el-button type="primary" @click="submitSearchEdit" :loading="isEditingSearch">保存修改</el-button>
+            </span>
+        </template>
+    </el-dialog>
+
+    <el-dialog title="修改历史操作记录" v-model="historyEditDialogVisible" width="500px">
+        <el-form :model="historyEditForm" label-width="80px">
+            <el-form-item label="中文标语">
+                <el-input v-model="historyEditForm.zh_term" type="textarea" :rows="2"></el-input>
+            </el-form-item>
+            <el-form-item label="英文译文">
+                <el-input v-model="historyEditForm.en_translation" type="textarea" :rows="2"></el-input>
+            </el-form-item>
+            <el-form-item label="词条分类">
+                <el-select v-model="historyEditForm.category" style="width: 100%;">
                     <el-option label="提示类" value="提示类"></el-option>
                     <el-option label="强制类" value="强制类"></el-option>
                     <el-option label="限制类" value="限制类"></el-option>
@@ -258,8 +287,8 @@
         </el-form>
         <template #footer>
             <span class="dialog-footer">
-                <el-button @click="editDialogVisible = false">取消</el-button>
-                <el-button type="primary" @click="submitHistoryEdit" :loading="isEditingRecord">保存修改</el-button>
+                <el-button @click="historyEditDialogVisible = false">取消</el-button>
+                <el-button type="primary" @click="submitHistoryEdit" :loading="isEditingHistory">保存修改</el-button>
             </span>
         </template>
     </el-dialog>
@@ -273,15 +302,19 @@
                 singleForm: { zh_text: '', en_text: '' },
                 isSubmitting: false,
                 recentAdditions: [],
-                historyData: [],
-                historyFilterCategory: '',
+                historyData: [], historyFilterCategory: '',
                 uploading: false, uploadPercent: 0, uploadStatusText: '',
                 
                 isMatching: false, matchPercent: 0, matchStatusText: '', 
                 matchResults: [], hasMatched: false,
                 
-                editDialogVisible: false, isEditingRecord: false,
-                editForm: { id: null, zh_term: '', en_translation: '', category: '' }
+                // 搜索/比对页的编辑弹窗状态
+                searchEditDialogVisible: false, isEditingSearch: false,
+                searchEditForm: { old_zh: '', old_en: '', new_zh: '', new_en: '', category: '' },
+
+                // 历史页的编辑弹窗状态
+                historyEditDialogVisible: false, isEditingHistory: false,
+                historyEditForm: { id: null, zh_term: '', en_translation: '', category: '' }
             }
         },
         mounted() {
@@ -305,38 +338,63 @@
                     ElementPlus.ElMessage.success('已成功复制译文'); t.remove();
                 }
             },
-            editTranslation(zh_text, old_en) {
-                ElementPlus.ElMessageBox.prompt(`修改【${zh_text}】的英文译文`, '编辑译文', {
-                    confirmButtonText: '保存', cancelButtonText: '取消', inputValue: old_en, inputType: 'textarea'
-                }).then(({ value }) => {
-                    const new_en = (value || "").trim();
-                    if (!new_en) return ElementPlus.ElMessage.warning('译文不能为空');
-                    if (new_en === old_en) return; 
-                    
-                    const fd = new FormData(); fd.append('zh_text', zh_text); fd.append('old_en', old_en); fd.append('new_en', new_en);
-                    axios.post('/api/edit_translation', fd).then(res => {
-                        if (res.data.status === 'success') {
-                            ElementPlus.ElMessage.success(res.data.msg);
-                            
-                            this.searchResults.forEach(item => {
-                                if (item.zh_text === zh_text) {
-                                    const idx = item.translations.indexOf(old_en);
-                                    if (idx !== -1) item.translations.splice(idx, 1, new_en);
-                                }
-                            });
-                            
-                            this.matchResults.forEach(item => {
-                                if (item.zh_text === zh_text) {
-                                    const idx = item.translations.indexOf(old_en);
-                                    if (idx !== -1) item.translations.splice(idx, 1, new_en);
-                                }
-                            });
-                            
-                            this.fetchHistory();
-                        } else ElementPlus.ElMessage.error(res.data.msg);
-                    });
-                }).catch(() => {});
+            
+            // ================= 搜索/比对页的双维编辑功能 =================
+            openSearchEditDialog(zh_text, en_text, category) {
+                this.searchEditForm = {
+                    old_zh: zh_text, old_en: en_text,
+                    new_zh: zh_text, new_en: en_text,
+                    category: category || ''
+                };
+                this.searchEditDialogVisible = true;
             },
+            submitSearchEdit() {
+                if(!this.searchEditForm.new_zh || !this.searchEditForm.new_en) {
+                    return ElementPlus.ElMessage.warning('中英文均不能为空！');
+                }
+                
+                this.isEditingSearch = true;
+                const fd = new FormData(); 
+                fd.append('old_zh', this.searchEditForm.old_zh); 
+                fd.append('old_en', this.searchEditForm.old_en); 
+                fd.append('new_zh', this.searchEditForm.new_zh); 
+                fd.append('new_en', this.searchEditForm.new_en);
+                fd.append('category', this.searchEditForm.category);
+
+                axios.post('/api/edit_signage', fd).then(res => {
+                    if (res.data.status === 'success') {
+                        ElementPlus.ElMessage.success(res.data.msg);
+                        this.searchEditDialogVisible = false;
+                        
+                        // 动态更新搜索页的视图
+                        this.searchResults.forEach(item => {
+                            if (item.zh_text === this.searchEditForm.old_zh) {
+                                item.zh_text = this.searchEditForm.new_zh; // 同步改组名
+                                const idx = item.translations.indexOf(this.searchEditForm.old_en);
+                                if (idx !== -1) item.translations.splice(idx, 1, this.searchEditForm.new_en);
+                                item.category = this.searchEditForm.category;
+                            }
+                        });
+                        
+                        // 动态更新比对页的视图
+                        this.matchResults.forEach(item => {
+                            if (item.zh_text === this.searchEditForm.old_zh) {
+                                item.zh_text = this.searchEditForm.new_zh;
+                                const idx = item.translations.indexOf(this.searchEditForm.old_en);
+                                if (idx !== -1) item.translations.splice(idx, 1, this.searchEditForm.new_en);
+                                item.category = this.searchEditForm.category;
+                            }
+                        });
+                        
+                        this.fetchHistory();
+                        this.fetchRecentAdditions();
+                    } else {
+                        ElementPlus.ElMessage.error(res.data.msg);
+                    }
+                }).finally(() => { this.isEditingSearch = false; });
+            },
+
+            // ================= 常规操作 =================
             submitSingle() {
                 if(!this.singleForm.zh_text || !this.singleForm.en_text) return ElementPlus.ElMessage.warning('请填写中英文');
                 this.isSubmitting = true;
@@ -432,23 +490,26 @@
                     this.historyData = res.data.data;
                 });
             },
-            openEditDialog(row) {
-                this.editForm = { id: row.id, zh_term: row.zh_term, en_translation: row.en_translation, category: row.category };
-                this.editDialogVisible = true;
+
+            // ================= 历史记录页的编辑功能 =================
+            openHistoryEditDialog(row) {
+                this.historyEditForm = { id: row.id, zh_term: row.zh_term, en_translation: row.en_translation, category: row.category };
+                this.historyEditDialogVisible = true;
             },
             submitHistoryEdit() {
-                if(!this.editForm.zh_term || !this.editForm.en_translation) return ElementPlus.ElMessage.warning('内容不能为空！');
-                this.isEditingRecord = true;
+                if(!this.historyEditForm.zh_term || !this.historyEditForm.en_translation) return ElementPlus.ElMessage.warning('内容不能为空！');
+                this.isEditingHistory = true;
                 const fd = new FormData();
-                fd.append('id', this.editForm.id); fd.append('zh_term', this.editForm.zh_term);
-                fd.append('en_translation', this.editForm.en_translation); fd.append('category', this.editForm.category);
+                fd.append('id', this.historyEditForm.id); fd.append('zh_term', this.historyEditForm.zh_term);
+                fd.append('en_translation', this.historyEditForm.en_translation); fd.append('category', this.historyEditForm.category);
                 axios.post('/api/history/update', fd).then(res => {
                     if(res.data.status === 'success') {
                         ElementPlus.ElMessage.success(res.data.msg);
-                        this.editDialogVisible = false; this.fetchHistory(); this.fetchRecentAdditions();
+                        this.historyEditDialogVisible = false; this.fetchHistory(); this.fetchRecentAdditions();
                     } else ElementPlus.ElMessage.error(res.data.msg);
-                }).finally(() => { this.isEditingRecord = false; });
+                }).finally(() => { this.isEditingHistory = false; });
             },
+            
             deleteHistoryRecord(row) {
                 ElementPlus.ElMessageBox.confirm(
                     `删除【${row.zh_term}】后，词库中的对应数据也将清除！是否继续？`, '危险操作警告', 
