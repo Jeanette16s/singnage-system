@@ -142,7 +142,6 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
     added_count = 0
     for item in processed_list:
         if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
-            # 解决 NaN 问题：强制转换为 None
             seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
             seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
             
@@ -167,7 +166,6 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         added_count, skip_count = 0, 0
         for item in processed_list:
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
-                # 解决 NaN 问题
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 
@@ -186,7 +184,9 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
 
 @app.post("/api/upload_docx")
 async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not file.filename.endswith('.docx'):
+    if file.filename.endswith('.doc'):
+        return {"status": "error", "msg": "不支持旧版 .doc 格式，为防止乱码，请先在本地另存为 .docx 格式后重试！"}
+    elif not file.filename.endswith('.docx'):
         return {"status": "error", "msg": "请上传 .docx 格式的 Word 文档！"}
 
     contents = await file.read()
@@ -207,8 +207,18 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
 
         for row in table.rows[1:]:
             if len(row.cells) <= max(sign_col_idx, suggestion_col_idx): continue
-            raw_sign = row.cells[sign_col_idx].text.strip()
-            raw_suggestion = row.cells[suggestion_col_idx].text.strip()
+            
+            # 【核心修复】：增加异常捕捉和长度暴力拦截，避免图片Base64卡死服务器
+            try:
+                raw_sign = row.cells[sign_col_idx].text.strip()
+                raw_suggestion = row.cells[suggestion_col_idx].text.strip()
+            except Exception:
+                continue # 如果读取单元格出错（例如复杂的OLE对象），直接跳过
+                
+            # 如果文本长度超过 1000 字符，通常是误读了图片或乱码文件，直接无视它
+            if len(raw_sign) > 1000 or len(raw_suggestion) > 1000:
+                continue
+                
             if not raw_sign and not raw_suggestion: continue
                 
             clean_zh = extract_zh_sign(raw_sign)
@@ -226,7 +236,6 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
         added_count, skip_count = 0, 0
         for item in processed_list:
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
-                # 解决 NaN 问题
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 
@@ -243,12 +252,55 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
     except Exception as e:
         return {"status": "error", "msg": f"数据处理过程中发生错误: {str(e)}"}
 
+# ================= 历史记录与管理接口 =================
+
 @app.get("/api/history")
 def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db)):
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
     records = query.order_by(ActionHistory.created_at.desc()).limit(limit).all()
     return {"data": records}
+
+@app.post("/api/history/update")
+def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation: str = Form(...), category: str = Form(...), db: Session = Depends(get_db)):
+    """在历史记录中编辑，并同步更新主词库数据"""
+    record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
+    if not record:
+        return {"status": "error", "msg": "找不到该条历史记录"}
+
+    # 尝试在主表里找到对应的那条标语并同步修改
+    sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
+    
+    # 更新历史记录自身
+    record.zh_term = zh_term
+    record.en_translation = en_translation
+    record.category = category
+    record.action_type = "记录修改"
+    
+    # 更新主表词库
+    if sign:
+        sign.zh_term = zh_term
+        sign.en_translation = en_translation
+        sign.category = category
+
+    db.commit()
+    return {"status": "success", "msg": "词条及分类已成功更新！"}
+
+@app.post("/api/history/delete")
+def delete_history(id: int = Form(...), db: Session = Depends(get_db)):
+    """删除历史记录，并同步从主词库中删除关联数据"""
+    record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
+    if not record:
+        return {"status": "error", "msg": "找不到该条历史记录"}
+
+    # 同步删除主表中的数据
+    sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
+    if sign:
+        db.delete(sign)
+
+    db.delete(record)
+    db.commit()
+    return {"status": "success", "msg": "词条及其历史记录已被永久删除。"}
 
 @app.get("/api/export_history")
 def export_history(category: str = "", db: Session = Depends(get_db)):
