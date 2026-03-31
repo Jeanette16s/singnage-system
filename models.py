@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from database import Base
 
+
 class Signage(Base):
     __tablename__ = "signs"
     # 告诉 SQLAlchemy：如果内存中已存在同名表，允许扩展/复用，不要报错
@@ -26,3 +27,13 @@ class ActionHistory(Base):
     en_translation = Column(String, nullable=False)             
     category = Column(String, nullable=True)                    
     created_at = Column(DateTime, server_default=func.now())
+    
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(20), default="viewer", nullable=False) # 可选值: admin, editor, viewer
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -8,3 +8,7 @@ pypinyin
 jinja2
 psycopg2-binary
 python-docx
+passlib
+bcrypt
+PyJWT
+python-multipart
