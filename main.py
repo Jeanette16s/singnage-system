@@ -121,7 +121,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     access_token = create_access_token(data={"sub": user.username, "role": user.role}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     return {"access_token": access_token, "token_type": "bearer", "role": user.role, "username": user.username}
 
-# 【全新接口】：公开的注册接口，默认注册为 viewer
 @app.post("/api/register")
 def register(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     if db.query(User).filter(User.username == username).first():
@@ -129,7 +128,6 @@ def register(username: str = Form(...), password: str = Form(...), db: Session =
     if len(password) < 6:
         return {"status": "error", "msg": "密码长度不能少于6位！"}
     
-    # 强制将新注册用户设为 viewer (浏览者)
     new_user = User(username=username, hashed_password=get_password_hash(password), role="viewer")
     db.add(new_user)
     db.commit()
@@ -140,7 +138,6 @@ def get_users(db: Session = Depends(get_db), current_user: User = Depends(requir
     users = db.query(User).all()
     return {"data": [{"id": u.id, "username": u.username, "role": u.role, "created_at": u.created_at} for u in users]}
 
-# 【全新接口】：管理员专属，用于在表格中直接修改用户角色
 @app.post("/api/users/role")
 def update_user_role(user_id: int = Form(...), role: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     if role not in ["admin", "editor", "viewer"]: return {"status": "error", "msg": "非法的角色！"}
@@ -162,12 +159,20 @@ def delete_user(user_id: int = Form(...), db: Session = Depends(get_db), current
     db.commit()
     return {"status": "success", "msg": "用户已删除"}
 
-# ================= 核心业务路由 (保留不变，受鉴权保护) =================
+# ================= 核心业务路由 =================
 
 @app.get("/")
 async def read_root():
-    html_path = get_resource_path(os.path.join("templates", "index.html"))
-    return FileResponse(html_path)
+    # 修复路径Bug：增加优先从同级目录加载 index.html 的逻辑
+    base_path = get_resource_path("index.html")
+    template_path = get_resource_path(os.path.join("templates", "index.html"))
+    
+    if os.path.exists(base_path):
+        return FileResponse(base_path)
+    elif os.path.exists(template_path):
+        return FileResponse(template_path)
+    else:
+        raise HTTPException(status_code=404, detail="未找到 index.html，请确保其与 main.py 处于同级目录或 templates 文件夹下。")
 
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
