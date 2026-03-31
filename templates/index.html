@@ -531,7 +531,7 @@
             },
             matchUpload(options) {
                 const formData = new FormData(); formData.append('file', options.file);
-                this.isMatching = true; this.matchPercent = 0; this.matchStatusText = '正在比对...';
+                this.isMatching = true; this.matchPercent = 0; this.matchStatusText = '正在比弹...';
                 axios.post('/api/match_docx', formData, { onUploadProgress: p => { this.matchPercent = Math.round((p.loaded * 100) / p.total); } }).then(res => {
                     if (res.data.status === 'success') { this.matchResults = res.data.data; this.hasMatched = true; options.onSuccess(res.data); } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
                 }).finally(() => { setTimeout(() => { this.isMatching = false; }, 800); });
@@ -565,9 +565,13 @@
         }
     };
     
-    // 由于我们把图标库放在了头部加载，这里就不会报错了
-    for (const [key, component] of Object.entries(ElementPlusIconsVue)) { App.component(key, component); }
-    Vue.createApp(App).use(ElementPlus).mount('#app');
+    // 修复 Bug：必须把全局组件绑定在 createApp 生成的真实应用实例上
+    const app = Vue.createApp(App);
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) { 
+        app.component(key, component); 
+    }
+    app.use(ElementPlus);
+    app.mount('#app');
 </script>
 </body>
 </html>
