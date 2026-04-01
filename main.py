@@ -58,7 +58,6 @@ def require_admin(current_user: User = Depends(get_current_user)):
 # ================= 系统初始化 =================
 Base.metadata.create_all(bind=engine)
 
-# 自动平滑升级数据库表，新增 username 字段
 try:
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE action_history ADD COLUMN username VARCHAR"))
@@ -175,29 +174,48 @@ async def read_root():
     elif os.path.exists(template_path): return FileResponse(template_path)
     else: raise HTTPException(status_code=404, detail="未找到 index.html")
 
+# 新增：独立接口用于提供词库总数据量
+@app.get("/api/stats")
+def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    count = db.query(Signage.zh_term).filter(
+        Signage.zh_term.isnot(None),
+        Signage.zh_term != 'nan',
+        Signage.zh_term != ''
+    ).distinct().count()
+    return {"status": "success", "total": count}
+
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if not keyword.strip(): return {"data": []}
     clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
     all_signs = db.query(Signage).all()
     grouped = {}
-    for sign in all_signs:
-        if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
-        clean_zh = str(sign.zh_term).replace('\n', '').replace('\r', '').replace(' ', '')
-        if not clean_zh: continue
-        if clean_keyword == clean_zh: score = 100.0
-        else:
-            score = SequenceMatcher(None, clean_keyword, clean_zh).ratio() * 100.0
-            if clean_keyword in clean_zh or clean_zh in clean_keyword:
-                len_ratio = min(len(clean_keyword), len(clean_zh)) / max(len(clean_keyword), len(clean_zh))
-                score = max(score, 70.0 + 29.0 * len_ratio)
-        if score >= 40.0:
+    
+    if not clean_keyword:
+        for sign in all_signs:
+            if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
             zh = sign.zh_term
-            if zh not in grouped: grouped[zh] = {"zh_text": zh, "category": sign.category, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
+            if zh not in grouped: 
+                grouped[zh] = {"zh_text": zh, "category": sign.category, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": 100.0}
             grouped[zh]["translations"].add(sign.en_translation)
-            if score > grouped[zh]["match_score"]: grouped[zh]["match_score"] = score
+    else:
+        for sign in all_signs:
+            if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
+            clean_zh = str(sign.zh_term).replace('\n', '').replace('\r', '').replace(' ', '')
+            if not clean_zh: continue
+            if clean_keyword == clean_zh: score = 100.0
+            else:
+                score = SequenceMatcher(None, clean_keyword, clean_zh).ratio() * 100.0
+                if clean_keyword in clean_zh or clean_zh in clean_keyword:
+                    len_ratio = min(len(clean_keyword), len(clean_zh)) / max(len(clean_keyword), len(clean_zh))
+                    score = max(score, 70.0 + 29.0 * len_ratio)
+            if score >= 40.0:
+                zh = sign.zh_term
+                if zh not in grouped: grouped[zh] = {"zh_text": zh, "category": sign.category, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
+                grouped[zh]["translations"].add(sign.en_translation)
+                if score > grouped[zh]["match_score"]: grouped[zh]["match_score"] = score
 
     if not grouped: return {"data": []}
+    
     seq_ids = [data["seq_id"] for data in grouped.values() if data["seq_id"]]
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     all_associated_items = {item.id: item for item in associated}.values()
@@ -211,8 +229,21 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
                 if b.zh_term not in seen_bro_zh:
                     data["associated_items"].append({"zh_text": b.zh_term, "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term], "order": b.sequence_order})
                     seen_bro_zh.add(b.zh_term)
+                    
     result_list = list(grouped.values())
-    result_list.sort(key=lambda x: (-x["match_score"], get_sort_key(x["zh_text"])))
+    
+    # 辅助排序：判断首字符是否为数字，实现数字沉底
+    def is_numeric_start(text):
+        clean_text = str(text).strip()
+        return 1 if clean_text and clean_text[0].isdigit() else 0
+
+    if not clean_keyword:
+        # 数字开头的沉底 -> 拼音排序
+        result_list.sort(key=lambda x: (is_numeric_start(x["zh_text"]), get_sort_key(x["zh_text"])))
+    else:
+        # 匹配度降序 -> 数字沉底 -> 拼音排序
+        result_list.sort(key=lambda x: (-x["match_score"], is_numeric_start(x["zh_text"]), get_sort_key(x["zh_text"])))
+        
     return {"data": result_list}
 
 @app.post("/api/edit_signage")
@@ -434,7 +465,7 @@ def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation
     return {"status": "success", "msg": "词条已成功更新！"}
 
 @app.post("/api/history/delete")
-def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record: return {"status": "error", "msg": "找不到该条历史记录"}
     sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
