@@ -12,102 +12,39 @@
     <style>
         /* ================= 全局基础 & 变量覆盖 ================= */
         :root {
-            --el-color-primary: #35564C; /* 深墨绿 */
+            --el-color-primary: #35564C; 
             --el-color-success: #5C807B; 
-            --el-color-warning: #F2A950; /* 采用参考图中的暖橙黄色 */
+            --el-color-warning: #F2A950; 
             --el-color-danger: #B65D4F; 
             --el-color-info: #757E7A;
             --el-bg-color: #ffffff; 
-            --el-bg-color-page: #F8F5F0; /* 采用参考图的柔和米色背景 */
+            --el-bg-color-page: #F8F5F0; 
             --el-text-color-primary: #1A201C; 
             --el-text-color-regular: #4A5550;
             --el-border-color-light: #EAE6DF; 
             --el-border-radius-base: 8px;
         }
 
-        body, html {
-            margin: 0; padding: 0; height: 100%;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: var(--el-bg-color-page); color: var(--el-text-color-primary);
-        }
-        
+        body, html { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: var(--el-bg-color-page); color: var(--el-text-color-primary); }
         #app { height: 100vh; display: flex; overflow: hidden; }
-        
-        /* 避免 Vue 加载时的闪烁问题 */
         [v-cloak] { display: none !important; }
-
         h1, h2, h3, .zh-title, .el-dialog__title { font-family: "Georgia", "Times New Roman", serif; letter-spacing: 0.5px; }
 
-        /* ================= 全新设计的登录页面专属样式 (参考图15.48.16) ================= */
-        .login-wrapper {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background-color: var(--el-bg-color-page); /* 柔和背景 */
-            display: flex; justify-content: center; align-items: center; z-index: 9999;
-        }
-        
-        .login-card {
-            background: #ffffff; 
-            border-radius: 24px; /* 更大的圆角 */
-            padding: 50px 45px;
-            width: 380px; 
-            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.04); /* 更柔和干净的阴影 */
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-
-        .login-card h2 { 
-            color: #000; /* 纯黑大标题 */
-            margin-bottom: 10px; 
-            font-size: 28px; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-            font-weight: 800;
-        }
-
-        .login-card p { 
-            color: #666; 
-            margin-bottom: 35px; 
-            font-size: 14px; 
-        }
-
-        /* 登录框的输入框样式覆盖 */
-        .login-card .el-input__wrapper {
-            background-color: #fff;
-            box-shadow: 0 0 0 1px #E0E0E0 inset; /* 默认浅灰色边框 */
-            border-radius: 12px;
-            padding: 4px 15px;
-        }
-        .login-card .el-input__wrapper.is-focus {
-            box-shadow: 0 0 0 1px #000 inset; /* 聚焦时变成黑色实线边框，类似原图 */
-        }
+        /* ================= 登录页面专属样式 ================= */
+        .login-wrapper { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: var(--el-bg-color-page); display: flex; justify-content: center; align-items: center; z-index: 9999; }
+        .login-card { background: #ffffff; border-radius: 24px; padding: 50px 45px; width: 380px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.04); text-align: center; transition: all 0.3s ease; }
+        .login-card h2 { color: #000; margin-bottom: 10px; font-size: 28px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; font-weight: 800; }
+        .login-card p { color: #666; margin-bottom: 35px; font-size: 14px; }
+        .login-card .el-input__wrapper { background-color: #fff; box-shadow: 0 0 0 1px #E0E0E0 inset; border-radius: 12px; padding: 4px 15px; }
+        .login-card .el-input__wrapper.is-focus { box-shadow: 0 0 0 1px #000 inset; }
         .login-card .el-form-item { margin-bottom: 22px; }
-
-        .login-btn {
-            width: 100%; 
-            border-radius: 12px; 
-            margin-top: 10px;
-            height: 48px;
-            font-size: 16px;
-            font-weight: 600;
-            background-color: var(--el-color-warning); /* 暖黄/橙色按钮 */
-            border: none;
-            color: #fff;
-        }
+        .login-btn { width: 100%; border-radius: 12px; margin-top: 10px; height: 48px; font-size: 16px; font-weight: 600; background-color: var(--el-color-warning); border: none; color: #fff; }
         .login-btn:hover { background-color: #E59F4A; }
-
-        .toggle-link-container {
-            margin-top: 30px; 
-            font-size: 13px; 
-            color: #888;
-        }
-        .toggle-link { 
-            cursor: pointer; 
-            color: #000; 
-            font-weight: bold; 
-            margin-left: 5px;
-        }
+        .toggle-link-container { margin-top: 30px; font-size: 13px; color: #888; }
+        .toggle-link { cursor: pointer; color: #000; font-weight: bold; margin-left: 5px; }
         .toggle-link:hover { text-decoration: underline; }
 
-        /* ================= 以下为主系统界面样式 (保持原样) ================= */
+        /* ================= 主系统界面样式 ================= */
         .sidebar-brand { position: absolute; top: 0; left: 0; width: 260px; padding: 35px 25px; box-sizing: border-box; background-color: var(--el-color-primary); color: #F4F2EC; z-index: 10; }
         .sidebar-brand h1 { font-size: 22px; margin: 0 0 8px 0; font-weight: 700; color: #fff;}
         .sidebar-brand p { font-size: 13px; margin: 0; opacity: 0.7; letter-spacing: 1px;}
@@ -140,10 +77,13 @@
         .el-tag--info    { background-color: #EEF0EF; color: var(--el-color-info); }
 
         .translation-row { display: flex; align-items: center; margin-bottom: 12px; padding: 10px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
-        .translation-tag { font-size: 16px; font-weight: 500; margin-right: 20px; }
+        .translation-tag { font-size: 16px; font-weight: 500; margin-right: 20px; flex: 1; }
         .action-btns { opacity: 0; transition: opacity 0.3s, transform 0.3s; transform: translateX(-10px); }
         .translation-row:hover .action-btns { opacity: 1; transform: translateX(0); }
         .action-btns .el-button { border-radius: 8px; border-width: 2px; font-weight: bold; }
+        
+        .delete-trans-btn { color: #C0C4CC; cursor: pointer; margin-left: 15px; padding: 2px; display: flex; align-items: center; border-radius: 50%; transition: all 0.2s ease; }
+        .delete-trans-btn:hover { color: var(--el-color-danger); background-color: #F7EAE8; }
 
         .asso-container { margin-top: 20px; border-top: 1px dashed var(--el-border-color-light); padding-top: 15px; }
         .asso-list { background-color: #F4F2EC; padding: 15px; border-radius: 10px; margin-top: 12px; border: 1px solid var(--el-border-color-lighter); }
@@ -205,7 +145,7 @@
 
     <template v-else>
         <div class="sidebar-brand">
-            <h1><span style="font-size: 24px; vertical-align: middle;">⚓</span> 公示语系统</h1>
+            <h1><span style="font-size: 24px; vertical-align: middle;"></span> 公示语系统</h1>
             <p>BILINGUAL SIGNAGE HUB</p>
         </div>
         <div class="user-info">
@@ -223,13 +163,13 @@
             <el-tab-pane label="🔍 词库查询">
                 <div class="search-bar">
                     <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch" style="flex: 1;"></el-input>
-                    <el-button @click="handleSearch" type="primary">模糊搜索</el-button>
+                    <el-button @click="handleSearch" type="primary">搜索</el-button>
                 </div>
                 <el-empty v-if="searchResults.length === 0" description="暂无搜索结果" image-size="120"></el-empty>
                 <el-card class="box-card" v-for="item in searchResults" :key="item.zh_text">
                     <template #header>
                         <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <div><span class="zh-title">{{ item.zh_text }}</span><el-tag v-if="item.match_score" size="small" type="info" style="margin-left: 10px;">匹配度: {{ item.match_score.toFixed(1) }}%</el-tag></div>
+                            <div><span class="zh-title">{{ item.zh_text }}</span></div>
                             <el-tag :type="getCategoryType(item.category)">{{ item.category }}</el-tag>
                         </div>
                     </template>
@@ -241,6 +181,9 @@
                                 <div class="action-btns">
                                     <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
                                     <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
+                                </div>
+                                <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
+                                    <el-icon><Close /></el-icon>
                                 </div>
                             </div>
                         </div>
@@ -258,10 +201,14 @@
 
             <el-tab-pane label="📝 文档比对">
                 <el-card shadow="never" style="margin-bottom: 25px; border-style: dashed !important;">
-                    <template #header><h3 style="margin:0;">上传 Word 文档进行精确比对</h3></template>
-                    <el-upload drag action="" :http-request="matchUpload" :show-file-list="false" accept=".docx, .doc" :disabled="isMatching">
+                    <template #header><h3 style="margin:0;">上传 Word 或 Excel 文档进行精确比对</h3></template>
+                    <el-upload drag action="" :http-request="matchUpload" :show-file-list="false" accept=".docx, .doc, .xlsx" :disabled="isMatching">
                         <el-icon class="el-icon--upload" style="color: var(--el-color-primary); font-size: 48px; margin-bottom: 15px;"><upload-filled /></el-icon>
-                        <div class="el-upload__text">拖拽 Word (.docx) 到此处，或 <em>点击上传</em></div>
+                        <div class="el-upload__text">拖拽 Word (.docx) 或 Excel (.xlsx) 到此处，或 <em>点击上传</em></div>
+                        <div class="el-upload__tip" style="margin-top: 12px; color: #888; line-height: 1.5;">
+                            系统将自动提取文档中的中文标识，并与线上词库进行查重匹配。<br/>
+                            <span style="color: #E6A23C;">*注：若上传 Excel，必须包含名为“公示语中文”的表头。</span>
+                        </div>
                     </el-upload>
                     <div v-if="isMatching" style="margin-top: 20px;">
                         <el-progress :percentage="matchPercent" :text-inside="true" :stroke-width="20" :status="matchPercent === 100 ? 'success' : ''" striped striped-flow></el-progress>
@@ -280,11 +227,14 @@
                                     <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
                                     <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
                                 </div>
+                                <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
+                                    <el-icon><Close /></el-icon>
+                                </div>
                             </div>
                         </div>
                     </el-card>
                 </div>
-                <el-empty v-else-if="hasMatched" description="未匹配到任何项" image-size="120"></el-empty>
+                <el-empty v-else-if="hasMatched" description="此文档提取出的文本，未在当前词库中匹配到任何内容" image-size="120"></el-empty>
             </el-tab-pane>
 
             <el-tab-pane v-if="hasEditPermission" label="⚙️ 数据录入与管理">
@@ -450,11 +400,21 @@
         },
         mounted() {
             if (this.isLoggedIn) {
-                this.fetchHistory();
-                if (this.userRole === 'admin') this.fetchUsers();
+                this.verifyToken();
             }
         },
         methods: {
+            verifyToken() {
+                axios.get('/api/verify_token').then(res => {
+                    if (res.data.status === 'success') {
+                        this.userRole = res.data.role;
+                        this.username = res.data.username;
+                        this.fetchHistory();
+                        if (this.userRole === 'admin') this.fetchUsers();
+                    }
+                }).catch(() => {});
+            },
+            
             handleLogin() {
                 if(!this.loginForm.username || !this.loginForm.password) return ElementPlus.ElMessage.warning('请输入账号密码');
                 this.isLoggingIn = true;
@@ -464,6 +424,7 @@
                     localStorage.setItem('token', res.data.access_token); localStorage.setItem('role', res.data.role); localStorage.setItem('username', res.data.username);
                     this.isLoggedIn = true; this.userRole = res.data.role; this.username = res.data.username;
                     ElementPlus.ElMessage.success('欢迎回来！');
+                    this.fetchHistory();
                     if (this.userRole === 'admin') this.fetchUsers();
                 }).finally(() => { this.isLoggingIn = false; });
             },
@@ -525,17 +486,71 @@
                 this.isEditingSearch = true; const fd = new FormData(); fd.append('old_zh', this.searchEditForm.old_zh); fd.append('old_en', this.searchEditForm.old_en); fd.append('new_zh', this.searchEditForm.new_zh); fd.append('new_en', this.searchEditForm.new_en); fd.append('category', this.searchEditForm.category);
                 axios.post('/api/edit_signage', fd).then(res => { if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.searchEditDialogVisible = false; this.handleSearch(); this.fetchHistory(); } else ElementPlus.ElMessage.error(res.data.msg); }).finally(() => { this.isEditingSearch = false; });
             },
+
+            deleteTranslation(zh, en) {
+                ElementPlus.ElMessageBox.confirm(`确定要删除译文 "${en}" 吗？此操作无法撤销。`, '⚠️ 删除警告', { type: 'warning' }).then(() => {
+                    const fd = new FormData();
+                    fd.append('zh_term', zh); fd.append('en_translation', en);
+                    axios.post('/api/delete_signage', fd).then(res => {
+                        if(res.data.status === 'success') {
+                            ElementPlus.ElMessage.success(res.data.msg);
+                            this.handleSearch(); 
+                            this.fetchHistory(); 
+                        } else {
+                            ElementPlus.ElMessage.error(res.data.msg);
+                        }
+                    });
+                }).catch(() => {});
+            },
+
             submitSingle() {
                 this.isSubmitting = true; const fd = new FormData(); fd.append('zh_text', this.singleForm.zh_text); fd.append('en_text', this.singleForm.en_text);
                 axios.post('/api/add_single', fd).then(res => { ElementPlus.ElMessage.success(res.data.msg); this.singleForm.zh_text = ''; this.singleForm.en_text = ''; this.fetchHistory(); }).finally(() => { this.isSubmitting = false; })
             },
+            
             matchUpload(options) {
-                const formData = new FormData(); formData.append('file', options.file);
-                this.isMatching = true; this.matchPercent = 0; this.matchStatusText = '正在比弹...';
-                axios.post('/api/match_docx', formData, { onUploadProgress: p => { this.matchPercent = Math.round((p.loaded * 100) / p.total); } }).then(res => {
-                    if (res.data.status === 'success') { this.matchResults = res.data.data; this.hasMatched = true; options.onSuccess(res.data); } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
-                }).finally(() => { setTimeout(() => { this.isMatching = false; }, 800); });
+                const formData = new FormData(); 
+                formData.append('file', options.file);
+                const fileName = options.file.name.toLowerCase();
+                let url = '';
+                
+                if (fileName.endsWith('.doc')) {
+                    ElementPlus.ElMessage.warning('请将 .doc 另存为 .docx 后再进行比对！');
+                    options.onError(); return;
+                } else if (fileName.endsWith('.docx')) {
+                    url = '/api/match_docx';
+                } else if (fileName.endsWith('.xlsx')) {
+                    url = '/api/match_excel';
+                } else {
+                    ElementPlus.ElMessage.error('仅支持 .docx 或 .xlsx 格式的文件！');
+                    options.onError(); return;
+                }
+
+                this.isMatching = true; this.matchPercent = 0; this.matchStatusText = '正在解析文件并匹配...';
+                
+                axios.post(url, formData, { 
+                    onUploadProgress: p => { 
+                        this.matchPercent = Math.round((p.loaded * 100) / p.total); 
+                        if (this.matchPercent === 100) this.matchStatusText = '解析完成，数据库极速匹配中...';
+                    } 
+                }).then(res => {
+                    if (res.data.status === 'success') { 
+                        this.matchResults = res.data.data; 
+                        this.hasMatched = true; 
+                        ElementPlus.ElNotification({ title: '比对完毕', message: `共提取 ${res.data.extracted_count} 个有效词条，在库中命中 ${this.matchResults.length} 个！`, type: 'success' });
+                        options.onSuccess(res.data); 
+                    } else { 
+                        ElementPlus.ElMessage.error(res.data.msg); 
+                        options.onError(); 
+                    }
+                }).catch(err => {
+                    ElementPlus.ElMessage.error('解析失败，请检查文件格式或重试');
+                    options.onError();
+                }).finally(() => { 
+                    setTimeout(() => { this.isMatching = false; }, 800); 
+                });
             },
+            
             customUpload(options) {
                 const formData = new FormData(); formData.append('file', options.file);
                 let url = options.file.name.endsWith('.xlsx') ? '/api/upload_excel' : '/api/upload_docx';
@@ -544,7 +559,11 @@
                     if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.fetchHistory(); options.onSuccess(res.data); } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
                 }).finally(() => { setTimeout(() => { this.uploading = false; }, 1000); });
             },
-            fetchHistory() { axios.get('/api/history', { params: { category: this.historyFilterCategory, limit: 1000 } }).then(res => { this.historyData = res.data.data; }); },
+            
+            fetchHistory() { 
+                axios.get('/api/history', { params: { category: this.historyFilterCategory, limit: 100 } }).then(res => { this.historyData = res.data.data; }); 
+            },
+            
             openHistoryEditDialog(row) { this.historyEditForm = { id: row.id, zh_term: row.zh_term, en_translation: row.en_translation, category: row.category }; this.historyEditDialogVisible = true; },
             submitHistoryEdit() {
                 this.isEditingHistory = true; const fd = new FormData(); fd.append('id', this.historyEditForm.id); fd.append('zh_term', this.historyEditForm.zh_term); fd.append('en_translation', this.historyEditForm.en_translation); fd.append('category', this.historyEditForm.category);
@@ -561,11 +580,16 @@
                 }); 
             },
             getCategoryType(cat) { const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' }; return map[cat] || 'primary'; },
-            formatDate(dateStr) { if(!dateStr) return ''; return new Date(dateStr).toLocaleString('zh-CN', { hour12: false }); }
+            
+            // 修复时区：后端已经提前计算补偿了 +8，此时抛弃复杂的 Date 转换，直接截取字符串确保万无一失
+            formatDate(dateStr) { 
+                if(!dateStr) return ''; 
+                // dateStr 会长类似 "2023-10-25T18:00:00"
+                return dateStr.replace('T', ' ').substring(0, 19);
+            }
         }
     };
     
-    // 修复 Bug：必须把全局组件绑定在 createApp 生成的真实应用实例上
     const app = Vue.createApp(App);
     for (const [key, component] of Object.entries(ElementPlusIconsVue)) { 
         app.component(key, component); 
