@@ -2,13 +2,14 @@ from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, sta
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 import pandas as pd
 import io
 import os
 import sys
 import re
 import docx
+import json
 from urllib.parse import quote
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta
@@ -22,18 +23,13 @@ from utils import process_dataframe_pipeline, get_sort_key
 # ================= 安全与鉴权配置 =================
 SECRET_KEY = "your-super-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
-# 将 Token 有效期设为 30 天，配合前端实现“30天内免密自动登录”
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
+def verify_password(plain_password, hashed_password): return pwd_context.verify(plain_password, hashed_password)
+def get_password_hash(password): return pwd_context.hash(password)
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=15))
@@ -41,9 +37,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="凭证无效或已过期，请重新登录", headers={"WWW-Authenticate": "Bearer"},
-    )
+    credentials_exception = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="凭证无效或已过期，请重新登录", headers={"WWW-Authenticate": "Bearer"})
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -54,17 +48,24 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 def require_editor(current_user: User = Depends(get_current_user)):
-    if current_user.role not in ["admin", "editor"]:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足：只有编辑或管理员可执行此操作")
+    if current_user.role not in ["admin", "editor"]: raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足：只有编辑或管理员可执行此操作")
     return current_user
 
 def require_admin(current_user: User = Depends(get_current_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足：需要管理员权限")
+    if current_user.role != "admin": raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足：需要管理员权限")
     return current_user
 
 # ================= 系统初始化 =================
 Base.metadata.create_all(bind=engine)
+
+# 自动平滑升级数据库表，新增 username 字段
+try:
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE action_history ADD COLUMN username VARCHAR"))
+        conn.commit()
+except Exception:
+    pass
+
 app = FastAPI(title="公示语多语言词库系统")
 
 @app.on_event("startup")
@@ -112,22 +113,17 @@ def extract_en_suggestion(text: str) -> str:
     return cleaned.strip()
 
 # ================= 认证与用户管理路由 =================
-
 @app.post("/api/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=400, detail="用户名或密码错误")
-    
+    if not user or not verify_password(form_data.password, user.hashed_password): raise HTTPException(status_code=400, detail="用户名或密码错误")
     access_token = create_access_token(data={"sub": user.username, "role": user.role}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     return {"access_token": access_token, "token_type": "bearer", "role": user.role, "username": user.username}
 
 @app.post("/api/register")
 def register(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    if db.query(User).filter(User.username == username).first():
-        return {"status": "error", "msg": "用户名已被占用，请换一个试试！"}
-    if len(password) < 6:
-        return {"status": "error", "msg": "密码长度不能少于6位！"}
+    if db.query(User).filter(User.username == username).first(): return {"status": "error", "msg": "用户名已被占用，请换一个试试！"}
+    if len(password) < 6: return {"status": "error", "msg": "密码长度不能少于6位！"}
     new_user = User(username=username, hashed_password=get_password_hash(password), role="viewer")
     db.add(new_user)
     db.commit()
@@ -137,10 +133,17 @@ def register(username: str = Form(...), password: str = Form(...), db: Session =
 def verify_token(current_user: User = Depends(get_current_user)):
     return {"status": "success", "role": current_user.role, "username": current_user.username}
 
+@app.post("/api/users/update_password")
+def update_password(old_password: str = Form(...), new_password: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not verify_password(old_password, current_user.hashed_password): return {"status": "error", "msg": "原密码错误！"}
+    if len(new_password) < 6: return {"status": "error", "msg": "新密码长度不能少于6位！"}
+    current_user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    return {"status": "success", "msg": "密码修改成功，请妥善保管！"}
+
 @app.get("/api/users")
 def get_users(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     users = db.query(User).all()
-    # 修复时区：SQLite存的func.now()为UTC，补偿8小时转换为北京时间
     return {"data": [{"id": u.id, "username": u.username, "role": u.role, "created_at": u.created_at + timedelta(hours=8) if u.created_at else None} for u in users]}
 
 @app.post("/api/users/role")
@@ -148,7 +151,7 @@ def update_user_role(user_id: int = Form(...), role: str = Form(...), db: Sessio
     if role not in ["admin", "editor", "viewer"]: return {"status": "error", "msg": "非法的角色！"}
     user = db.query(User).filter(User.id == user_id).first()
     if not user: return {"status": "error", "msg": "找不到该用户"}
-    if user.username == "admin" and role != "admin": return {"status": "error", "msg": "为防止系统失控，禁止修改初始 admin 的权限！"}
+    if user.username == "admin" and role != "admin": return {"status": "error", "msg": "禁止修改初始 admin 的权限！"}
     user.role = role
     db.commit()
     return {"status": "success", "msg": f"已将 {user.username} 的权限更新为 {role}"}
@@ -223,17 +226,16 @@ def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str =
     if (clean_old_zh != clean_new_zh or clean_old_en != clean_new_en):
         if db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_new_zh, func.replace(Signage.en_translation, '\r', '') == clean_new_en).first(): return {"status": "error", "msg": "修改后的组合已存在！"}
     record.zh_term = clean_new_zh; record.en_translation = clean_new_en; record.category = category
-    db.add(ActionHistory(action_type="编辑", zh_term=clean_new_zh, en_translation=clean_new_en, category=category))
+    db.add(ActionHistory(action_type="编辑", zh_term=clean_new_zh, en_translation=clean_new_en, category=category, username=current_user.username))
     db.commit()
     return {"status": "success", "msg": "词条修改成功！"}
 
 @app.post("/api/delete_signage")
 def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     record = db.query(Signage).filter(Signage.zh_term == zh_term, Signage.en_translation == en_translation).first()
-    if not record: 
-        return {"status": "error", "msg": "找不到该词条，可能已被删除"}
+    if not record: return {"status": "error", "msg": "找不到该词条，可能已被删除"}
     db.delete(record)
-    db.add(ActionHistory(action_type="删除译文", zh_term=zh_term, en_translation=en_translation, category=record.category))
+    db.add(ActionHistory(action_type="删除译文", zh_term=zh_term, en_translation=en_translation, category=record.category, username=current_user.username))
     db.commit()
     return {"status": "success", "msg": "译文已成功删除！"}
 
@@ -249,7 +251,7 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
             seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
             seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
             db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
-            db.add(ActionHistory(action_type="新增", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+            db.add(ActionHistory(action_type="单条录入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
             added_count += 1
     db.commit()
     return {"status": "success", "msg": f"录入成功，受影响条数：{added_count}"}
@@ -267,7 +269,7 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
-                db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+                db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
             else: skip_count += 1
         db.commit()
@@ -305,7 +307,7 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
-                db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category']))
+                db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
             else: skip_count += 1
         db.commit()
@@ -359,43 +361,28 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
 
 @app.post("/api/match_excel")
 async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """仅提取 Excel 中的“公示语中文”列并去词库中比对"""
-    if not file.filename.endswith('.xlsx'):
-        return {"status": "error", "msg": "请上传 .xlsx 格式的 Excel 文档！"}
-
+    if not file.filename.endswith('.xlsx'): return {"status": "error", "msg": "请上传 .xlsx 格式！"}
     contents = await file.read()
     try:
         df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
-        if '公示语中文' not in df.columns:
-            return {"status": "error", "msg": "Excel文档必须包含名为 '公示语中文' 的表头列！"}
-    except Exception as e:
-        return {"status": "error", "msg": f"读取 Excel 文档失败: {e}"}
-
+        if '公示语中文' not in df.columns: return {"status": "error", "msg": "Excel文档必须包含名为 '公示语中文' 的表头列！"}
+    except Exception as e: return {"status": "error", "msg": f"读取失败: {e}"}
     extracted_zh_terms = set()
     for zh_val in df['公示语中文'].dropna():
         raw_sign = str(zh_val).strip()
-        if len(raw_sign) > 1000 or not raw_sign:
-            continue
+        if len(raw_sign) > 1000 or not raw_sign: continue
         clean_zh = extract_zh_sign(raw_sign)
-        if clean_zh and clean_zh.lower() != 'nan':
-            extracted_zh_terms.add(clean_zh)
-
-    if not extracted_zh_terms:
-        return {"status": "error", "msg": "未能从 Excel 的 '公示语中文' 列提取到有效的标识文本。"}
-
+        if clean_zh and clean_zh.lower() != 'nan': extracted_zh_terms.add(clean_zh)
+    if not extracted_zh_terms: return {"status": "error", "msg": "未能提取到有效的标识文本。"}
     clean_extracted = {term.replace('\n', '').replace('\r', '').replace(' ', '') for term in extracted_zh_terms}
     db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
     matched = db.query(Signage).filter(db_zh_clean.in_(clean_extracted)).all()
-
     seq_ids = [m.sequence_id for m in matched if m.sequence_id]
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
-        
     grouped = {}
     for item in matched:
-        if item.zh_term not in grouped:
-            grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
         grouped[item.zh_term]["translations"].add(item.en_translation)
-
     all_associated_items = {item.id: item for item in associated}.values()
     for zh, data in grouped.items():
         data["translations"] = list(data["translations"])
@@ -407,23 +394,19 @@ async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db
                 if b.zh_term not in seen_bro_zh:
                     data["associated_items"].append({"zh_text": b.zh_term, "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term], "order": b.sequence_order})
                     seen_bro_zh.add(b.zh_term)
-
     result_list = list(grouped.values())
     result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
-    
-    return {
-        "status": "success", 
-        "data": result_list, 
-        "extracted_count": len(extracted_zh_terms)
-    }
+    return {"status": "success", "data": result_list, "extracted_count": len(extracted_zh_terms)}
+
+# ================= 历史记录与管理接口 =================
 
 @app.get("/api/history")
-def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_history(category: str = "", username: str = "", limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
+    if username: query = query.filter(ActionHistory.username == username)
     records = query.order_by(ActionHistory.created_at.desc()).limit(limit).all()
     
-    # 修复时区：SQLite数据库存的 func.now() 为 UTC，提取时统一补偿 8 小时转为北京时间
     result = []
     for r in records:
         bj_time = r.created_at + timedelta(hours=8) if r.created_at else None
@@ -433,7 +416,8 @@ def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_
             "zh_term": r.zh_term,
             "en_translation": r.en_translation,
             "category": r.category,
-            "created_at": bj_time
+            "created_at": bj_time,
+            "username": r.username
         })
     return {"data": result}
 
@@ -444,7 +428,7 @@ def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record: return {"status": "error", "msg": "找不到该条历史记录"}
     sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
-    record.zh_term = clean_zh; record.en_translation = clean_en; record.category = category; record.action_type = "记录修改"
+    record.zh_term = clean_zh; record.en_translation = clean_en; record.category = category; record.action_type = "记录修改"; record.username = current_user.username
     if sign: sign.zh_term = clean_zh; sign.en_translation = clean_en; sign.category = category
     db.commit()
     return {"status": "success", "msg": "词条已成功更新！"}
@@ -459,18 +443,38 @@ def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_u
     db.commit()
     return {"status": "success", "msg": "已永久删除。"}
 
+@app.post("/api/history/batch_delete")
+def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    try:
+        ids = json.loads(id_list)
+        if not ids: return {"status": "error", "msg": "未选中任何记录"}
+        records = db.query(ActionHistory).filter(ActionHistory.id.in_(ids)).all()
+        count = 0
+        for r in records:
+            if current_user.role != 'admin' and r.username != current_user.username:
+                continue
+            sign = db.query(Signage).filter(Signage.zh_term == r.zh_term, Signage.en_translation == r.en_translation).first()
+            if sign: db.delete(sign)
+            db.delete(r)
+            count += 1
+        db.commit()
+        return {"status": "success", "msg": f"成功批量删除了 {count} 条记录！"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "msg": f"批量删除失败: {str(e)}"}
+
 @app.get("/api/export_history")
-def export_history(category: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def export_history(category: str = "", username: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
+    if username: query = query.filter(ActionHistory.username == username)
     records = query.order_by(ActionHistory.created_at.desc()).all()
     
-    # 修复时区：Excel 导出补偿 8 小时转为北京时间
-    data = [{"操作类型": r.action_type, "公示语中文": r.zh_term, "英文译文": r.en_translation, "公示语分类": r.category, "操作时间": (r.created_at + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""} for r in records]
+    data = [{"操作类型": r.action_type, "操作人": r.username or "系统", "公示语中文": r.zh_term, "英文译文": r.en_translation, "公示语分类": r.category, "操作时间": (r.created_at + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""} for r in records]
     
     df = pd.DataFrame(data)
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='历史记录')
+    with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='历史与审计记录')
     output.seek(0)
     filename = quote("词库新增与编辑记录.xlsx")
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename*=utf-8''{filename}"})

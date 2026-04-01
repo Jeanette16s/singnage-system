@@ -2,14 +2,13 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from database import Base
 
-
 class Signage(Base):
     __tablename__ = "signs"
     # 告诉 SQLAlchemy：如果内存中已存在同名表，允许扩展/复用，不要报错
     __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    # ⚠️ 删除了这里的 index=True，解决超长文本报错，且不影响模糊搜索
+    # 删除了这里的 index=True，解决超长文本报错，且不影响模糊搜索
     zh_term = Column(String, nullable=False)                    
     en_translation = Column(String, nullable=False)             
     sequence_id = Column(String, index=True, nullable=True)     
@@ -27,7 +26,8 @@ class ActionHistory(Base):
     en_translation = Column(String, nullable=False)             
     category = Column(String, nullable=True)                    
     created_at = Column(DateTime, server_default=func.now())
-    
+    # 新增字段：记录操作人，用于个人数据中心和全局审计溯源
+    username = Column(String, nullable=True)
 
 class User(Base):
     __tablename__ = "users"
