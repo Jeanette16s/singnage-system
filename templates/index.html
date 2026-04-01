@@ -60,6 +60,10 @@
         .main-layout-tabs > .el-tabs__header .el-tabs__item.is-active { color: #fff !important; background-color: rgba(255, 255, 255, 0.1); border-right: 4px solid var(--el-color-warning); font-weight: 600; }
         .main-layout-tabs > .el-tabs__content { flex: 1; height: 100vh; overflow-y: auto; padding: 40px 50px !important; box-sizing: border-box; background-color: var(--el-bg-color-page); }
 
+        /* 侧边栏菜单图标样式 */
+        .custom-tabs-label { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+        .custom-tabs-label .el-icon { font-size: 18px; opacity: 0.9; }
+
         .search-bar { max-width: 700px; margin: 0 auto 40px auto; display: flex; align-items: stretch; gap: 15px; background: var(--el-bg-color); padding: 12px 15px; border-radius: 16px; border: 1px solid var(--el-border-color-light); box-shadow: 0 8px 20px rgba(0,0,0,0.03); }
         .search-bar .el-textarea__inner { border: none; box-shadow: none; background: transparent; font-size: 15px; resize: none; }
         .search-bar .el-button { border-radius: 12px; font-weight: 600; padding: 0 25px; height: auto; }
@@ -145,7 +149,7 @@
 
     <template v-else>
         <div class="sidebar-brand">
-            <h1><span style="font-size: 24px; vertical-align: middle;"></span> 公示语系统</h1>
+            <h1>公示语系统</h1>
             <p>BILINGUAL SIGNAGE HUB</p>
         </div>
         <div class="user-info">
@@ -160,7 +164,13 @@
         </div>
 
         <el-tabs tab-position="left" class="main-layout-tabs">
-            <el-tab-pane label="🔍 词库查询">
+            <el-tab-pane>
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><Search /></el-icon>
+                        <span>词库查询</span>
+                    </span>
+                </template>
                 <div class="search-bar">
                     <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch" style="flex: 1;"></el-input>
                     <el-button @click="handleSearch" type="primary">搜索</el-button>
@@ -199,7 +209,13 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane label="📝 文档比对">
+            <el-tab-pane>
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><Document /></el-icon>
+                        <span>文档比对</span>
+                    </span>
+                </template>
                 <el-card shadow="never" style="margin-bottom: 25px; border-style: dashed !important;">
                     <template #header><h3 style="margin:0;">上传 Word 或 Excel 文档进行精确比对</h3></template>
                     <el-upload drag action="" :http-request="matchUpload" :show-file-list="false" accept=".docx, .doc, .xlsx" :disabled="isMatching">
@@ -217,7 +233,9 @@
                 </el-card>
 
                 <div v-if="matchResults.length > 0">
-                    <h3 style="margin-bottom: 20px; color: var(--el-color-primary);">🎉 找到了 {{ matchResults.length }} 个已有词条</h3>
+                    <h3 style="margin-bottom: 20px; color: var(--el-color-primary); display: flex; align-items: center;">
+                        <el-icon style="margin-right: 8px;"><Trophy /></el-icon> 找到了 {{ matchResults.length }} 个已有词条
+                    </h3>
                     <el-card class="box-card" v-for="item in matchResults" :key="item.zh_text">
                         <template #header><div style="display: flex; justify-content: space-between;"><span class="zh-title">{{ item.zh_text }}</span><el-tag :type="getCategoryType(item.category)">{{ item.category }}</el-tag></div></template>
                         <div style="margin-bottom: 10px;">
@@ -237,11 +255,21 @@
                 <el-empty v-else-if="hasMatched" description="此文档提取出的文本，未在当前词库中匹配到任何内容" image-size="120"></el-empty>
             </el-tab-pane>
 
-            <el-tab-pane v-if="hasEditPermission" label="⚙️ 数据录入与管理">
+            <el-tab-pane v-if="hasEditPermission">
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><Edit /></el-icon>
+                        <span>数据录入</span>
+                    </span>
+                </template>
                 <el-row :gutter="25">
                     <el-col :span="11">
                         <el-card shadow="never">
-                            <template #header><h3 style="margin:0;">✍️ 单条手动录入</h3></template>
+                            <template #header>
+                                <h3 style="margin:0; display: flex; align-items: center;">
+                                    单条手动录入
+                                </h3>
+                            </template>
                             <el-form :model="singleForm" label-position="top">
                                 <el-form-item label="中文标语"><el-input type="textarea" v-model="singleForm.zh_text"></el-input></el-form-item>
                                 <el-form-item label="英文翻译"><el-input type="textarea" v-model="singleForm.en_text"></el-input></el-form-item>
@@ -251,7 +279,11 @@
                     </el-col>
                     <el-col :span="13">
                         <el-card shadow="never" style="height: 100%;">
-                            <template #header><h3 style="margin:0;">📂 批量文件上传</h3></template>
+                            <template #header>
+                                <h3 style="margin:0; display: flex; align-items: center;">
+                                    <el-icon style="margin-right: 8px;"><FolderOpened /></el-icon>批量文件上传
+                                </h3>
+                            </template>
                             <el-upload drag action="" :http-request="customUpload" :show-file-list="false" accept=".xlsx, .docx, .doc" :disabled="uploading">
                                 <el-icon class="el-icon--upload" style="color: var(--el-color-primary); font-size: 48px;"><upload-filled /></el-icon>
                                 <div class="el-upload__text">拖拽文件到此处，或 <em>点击上传</em></div>
@@ -265,11 +297,19 @@
                 </el-row>
             </el-tab-pane>
 
-            <el-tab-pane label="🕒 历史记录与导出">
+            <el-tab-pane>
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><Clock /></el-icon>
+                        <span>历史记录</span>
+                    </span>
+                </template>
                 <el-card shadow="never" style="height: calc(100vh - 80px); display: flex; flex-direction: column;">
                     <div style="margin-bottom: 20px; display: flex; gap: 15px;">
                         <el-select v-model="historyFilterCategory" placeholder="全部分类" @change="fetchHistory" clearable><el-option label="提示类" value="提示类"></el-option><el-option label="指示类" value="指示类"></el-option></el-select>
-                        <el-button type="success" @click="exportHistory">⬇️ 导出</el-button>
+                        <el-button type="success" @click="exportHistory">
+                            <el-icon style="margin-right: 4px;"><Download /></el-icon>导出
+                        </el-button>
                         <el-button @click="fetchHistory">刷新</el-button>
                     </div>
                     <el-table :data="historyData" style="width: 100%; flex: 1;" height="100%" stripe>
@@ -287,7 +327,13 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane v-if="userRole === 'admin'" label="👥 用户管理">
+            <el-tab-pane v-if="userRole === 'admin'">
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><User /></el-icon>
+                        <span>用户管理</span>
+                    </span>
+                </template>
                 <el-card shadow="never" style="height: calc(100vh - 80px); display: flex; flex-direction: column;">
                     <template #header>
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -488,7 +534,7 @@
             },
 
             deleteTranslation(zh, en) {
-                ElementPlus.ElMessageBox.confirm(`确定要删除译文 "${en}" 吗？此操作无法撤销。`, '⚠️ 删除警告', { type: 'warning' }).then(() => {
+                ElementPlus.ElMessageBox.confirm(`确定要删除译文 "${en}" 吗？此操作无法撤销。`, '删除警告', { type: 'warning' }).then(() => {
                     const fd = new FormData();
                     fd.append('zh_term', zh); fd.append('en_translation', en);
                     axios.post('/api/delete_signage', fd).then(res => {
@@ -581,10 +627,8 @@
             },
             getCategoryType(cat) { const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' }; return map[cat] || 'primary'; },
             
-            // 修复时区：后端已经提前计算补偿了 +8，此时抛弃复杂的 Date 转换，直接截取字符串确保万无一失
             formatDate(dateStr) { 
                 if(!dateStr) return ''; 
-                // dateStr 会长类似 "2023-10-25T18:00:00"
                 return dateStr.replace('T', ' ').substring(0, 19);
             }
         }
