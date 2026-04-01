@@ -55,13 +55,11 @@
         .custom-tabs-label { display: flex; align-items: center; gap: 10px; font-size: 15px; }
         .custom-tabs-label .el-icon { font-size: 18px; opacity: 0.9; }
 
-        /* ========= 新增：老虎机滚轮统计横幅 ========= */
         .stat-banner { display: flex; align-items: center; justify-content: center; margin-bottom: 25px; font-size: 16px; color: var(--el-text-color-regular); background: #ffffff; padding: 15px; border-radius: 12px; border: 1px dashed var(--el-border-color-light); box-shadow: 0 4px 12px rgba(0,0,0,0.02); }
         .slot-machine { display: inline-flex; margin: 0 10px; height: 32px; overflow: hidden; background: var(--el-color-primary); color: #fff; border-radius: 6px; padding: 0 5px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
         .digit-window { width: 22px; height: 32px; overflow: hidden; text-align: center; font-size: 24px; font-weight: bold; line-height: 32px; }
         .digit-col { display: flex; flex-direction: column; }
         .digit-item { height: 32px; flex-shrink: 0; }
-        /* ========================================= */
 
         .search-bar { max-width: 700px; margin: 0 auto 40px auto; display: flex; align-items: stretch; gap: 15px; background: var(--el-bg-color); padding: 12px 15px; border-radius: 16px; border: 1px solid var(--el-border-color-light); box-shadow: 0 8px 20px rgba(0,0,0,0.03); }
         .search-bar .el-textarea__inner { border: none; box-shadow: none; background: transparent; font-size: 15px; resize: none; }
@@ -162,7 +160,7 @@
                 
                 <div class="stat-banner" v-if="rollTarget.length > 0">
                     <el-icon style="margin-right: 8px; font-size: 20px; color: var(--el-color-warning);"><Trophy /></el-icon>
-                    <span style="font-weight: 600; letter-spacing: 1px;">已收录</span>
+                    <span style="font-weight: 600; letter-spacing: 1px;">主库已收录</span>
                     <div class="slot-machine">
                         <div class="digit-window" v-for="(col, i) in paddedTotal" :key="i">
                             <div class="digit-col" :style="{ transform: `translateY(-${rollTarget[i] * 32}px)`, transition: `transform ${1 + (paddedTotal.length - i) * 0.4}s cubic-bezier(0.25, 1, 0.5, 1)` }">
@@ -505,7 +503,6 @@
                 searchEditDialogVisible: false, isEditingSearch: false, searchEditForm: { old_zh: '', old_en: '', new_zh: '', new_en: '', category: '' },
                 historyEditDialogVisible: false, isEditingHistory: false, historyEditForm: { id: null, zh_term: '', en_translation: '', category: '' },
                 
-                // 新增：老虎机滚轮统计所需数据
                 paddedTotal: [],
                 rollTarget: []
             }
@@ -523,7 +520,7 @@
                         this.userRole = res.data.role; this.username = res.data.username;
                         
                         this.handleSearch();
-                        this.fetchStats(); // 拉取全局统计数据
+                        this.fetchStats();
                         
                         if (this.hasEditPermission) {
                             this.fetchRecentAdditions();
@@ -542,7 +539,7 @@
                     ElementPlus.ElMessage.success('欢迎回来！');
                     
                     this.handleSearch();
-                    this.fetchStats(); // 拉取全局统计数据
+                    this.fetchStats();
 
                     if (this.hasEditPermission) {
                         this.fetchRecentAdditions();
@@ -552,11 +549,9 @@
                 }).finally(() => { this.isLoggingIn = false; });
             },
             
-            // 新增：拉取总词条数量并触发老虎机动画
             fetchStats() {
                 axios.get('/api/stats').then(res => {
                     const totalStr = String(res.data.total);
-                    // 如果位数变化，或首次加载，初始化为0再触发动画
                     if (this.paddedTotal.length !== totalStr.length) {
                         this.paddedTotal = Array.from({length: totalStr.length}, () => '0');
                         this.rollTarget = Array.from({length: totalStr.length}, () => 0);
@@ -607,7 +602,7 @@
                     axios.post('/api/history/batch_delete', fd).then(res => {
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
-                            this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); // 刷新总数
+                            this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats();
                             if(this.hasEditPermission) this.fetchAdminHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
@@ -659,16 +654,15 @@
             deleteTranslation(zh, en) {
                 ElementPlus.ElMessageBox.confirm(`确定删除?`, '警告', { type: 'warning' }).then(() => {
                     const fd = new FormData(); fd.append('zh_term', zh); fd.append('en_translation', en);
-                    axios.post('/api/delete_signage', fd).then(res => { if(res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(); this.fetchStats(); /*刷新总数*/ if(this.hasEditPermission) this.fetchAdminHistory(); } });
+                    axios.post('/api/delete_signage', fd).then(res => { if(res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(); this.fetchStats(); if(this.hasEditPermission) this.fetchAdminHistory(); } });
                 }).catch(() => {});
             },
 
             submitSingle() {
                 this.isSubmitting = true; const fd = new FormData(); fd.append('zh_text', this.singleForm.zh_text); fd.append('en_text', this.singleForm.en_text);
                 axios.post('/api/add_single', fd).then(res => { 
-                    // 这里也配置了 10秒留存
                     ElementPlus.ElMessage({ message: res.data.msg, type: 'success', duration: 10000, showClose: true });
-                    this.singleForm.zh_text = ''; this.singleForm.en_text = ''; this.fetchRecentAdditions(); this.fetchStats(); /*刷新总数*/ if(this.hasEditPermission) this.fetchAdminHistory(); 
+                    this.singleForm.zh_text = ''; this.singleForm.en_text = ''; this.fetchRecentAdditions(); this.fetchStats(); if(this.hasEditPermission) this.fetchAdminHistory(); 
                 }).finally(() => { this.isSubmitting = false; })
             },
             matchUpload(options) {
@@ -691,7 +685,6 @@
                 this.uploading = true; this.uploadPercent = 0; this.uploadStatusText = '入库处理中...';
                 axios.post(url, formData, { onUploadProgress: p => { this.uploadPercent = Math.round((p.loaded * 100) / p.total); } }).then(res => {
                     if (res.data.status === 'success') { 
-                        // 将停留时间延长到 10000ms (10秒)
                         ElementPlus.ElMessage({
                             message: res.data.msg,
                             type: 'success',
@@ -699,7 +692,7 @@
                             showClose: true
                         });
                         this.fetchRecentAdditions(); 
-                        this.fetchStats(); // 刷新总数
+                        this.fetchStats();
                         if(this.hasEditPermission) this.fetchAdminHistory(); 
                         options.onSuccess(res.data); 
                     } else { 
@@ -732,7 +725,7 @@
                     axios.post('/api/history/delete', fd).then(res => { 
                         if(res.data.status === 'success') { 
                             ElementPlus.ElMessage.success('已清退数据'); 
-                            this.fetchStats(); // 刷新总数
+                            this.fetchStats();
                             if(isAdminTab) this.fetchAdminHistory(); 
                             if(this.profileDrawerVisible) this.fetchMyUploads();
                         } 
