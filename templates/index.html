@@ -55,6 +55,14 @@
         .custom-tabs-label { display: flex; align-items: center; gap: 10px; font-size: 15px; }
         .custom-tabs-label .el-icon { font-size: 18px; opacity: 0.9; }
 
+        /* ========= 新增：老虎机滚轮统计横幅 ========= */
+        .stat-banner { display: flex; align-items: center; justify-content: center; margin-bottom: 25px; font-size: 16px; color: var(--el-text-color-regular); background: #ffffff; padding: 15px; border-radius: 12px; border: 1px dashed var(--el-border-color-light); box-shadow: 0 4px 12px rgba(0,0,0,0.02); }
+        .slot-machine { display: inline-flex; margin: 0 10px; height: 32px; overflow: hidden; background: var(--el-color-primary); color: #fff; border-radius: 6px; padding: 0 5px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2); }
+        .digit-window { width: 22px; height: 32px; overflow: hidden; text-align: center; font-size: 24px; font-weight: bold; line-height: 32px; }
+        .digit-col { display: flex; flex-direction: column; }
+        .digit-item { height: 32px; flex-shrink: 0; }
+        /* ========================================= */
+
         .search-bar { max-width: 700px; margin: 0 auto 40px auto; display: flex; align-items: stretch; gap: 15px; background: var(--el-bg-color); padding: 12px 15px; border-radius: 16px; border: 1px solid var(--el-border-color-light); box-shadow: 0 8px 20px rgba(0,0,0,0.03); }
         .search-bar .el-textarea__inner { border: none; box-shadow: none; background: transparent; font-size: 15px; resize: none; }
         .search-bar .el-button { border-radius: 12px; font-weight: 600; padding: 0 25px; height: auto; }
@@ -151,11 +159,28 @@
                         <span>词库查询</span>
                     </span>
                 </template>
+                
+                <div class="stat-banner" v-if="rollTarget.length > 0">
+                    <el-icon style="margin-right: 8px; font-size: 20px; color: var(--el-color-warning);"><Trophy /></el-icon>
+                    <span style="font-weight: 600; letter-spacing: 1px;">已收录</span>
+                    <div class="slot-machine">
+                        <div class="digit-window" v-for="(col, i) in paddedTotal" :key="i">
+                            <div class="digit-col" :style="{ transform: `translateY(-${rollTarget[i] * 32}px)`, transition: `transform ${1 + (paddedTotal.length - i) * 0.4}s cubic-bezier(0.25, 1, 0.5, 1)` }">
+                                <div class="digit-item" v-for="n in 10" :key="n-1">{{ n-1 }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <span style="font-weight: 600; letter-spacing: 1px;">条公示语</span>
+                </div>
+
                 <div class="search-bar">
                     <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch" style="flex: 1;"></el-input>
                     <el-button @click="handleSearch" type="primary">搜索</el-button>
                 </div>
-                <el-empty v-if="searchResults.length === 0" description="暂无搜索结果" image-size="120"></el-empty>
+                
+                <el-empty v-if="searchResults.length === 0 && searchKeyword" description="暂无搜索结果" image-size="120"></el-empty>
+                <el-empty v-else-if="searchResults.length === 0" description="词库为空" image-size="120"></el-empty>
+                
                 <el-card class="box-card" v-for="item in searchResults" :key="item.zh_text">
                     <template #header>
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -292,7 +317,7 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane v-if="userRole === 'admin'">
+            <el-tab-pane v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><List /></el-icon>
@@ -313,7 +338,7 @@
                         <el-table-column prop="action_type" label="类型" width="100"></el-table-column>
                         <el-table-column prop="zh_term" label="中文原文" min-width="150"></el-table-column>
                         <el-table-column prop="en_translation" label="英文译文" min-width="150"></el-table-column>
-                        <el-table-column label="管理" width="90" fixed="right" align="center">
+                        <el-table-column label="管理" width="90" fixed="right" align="center" v-if="userRole === 'admin'">
                             <template #default="scope">
                                 <el-button size="small" type="danger" link @click="deleteHistoryRecord(scope.row.id, true)">清退</el-button>
                             </template>
@@ -478,7 +503,11 @@
                 pwdForm: { old_password: '', new_password: '', confirm_password: '' }, isUpdatingPwd: false,
                 
                 searchEditDialogVisible: false, isEditingSearch: false, searchEditForm: { old_zh: '', old_en: '', new_zh: '', new_en: '', category: '' },
-                historyEditDialogVisible: false, isEditingHistory: false, historyEditForm: { id: null, zh_term: '', en_translation: '', category: '' }
+                historyEditDialogVisible: false, isEditingHistory: false, historyEditForm: { id: null, zh_term: '', en_translation: '', category: '' },
+                
+                // 新增：老虎机滚轮统计所需数据
+                paddedTotal: [],
+                rollTarget: []
             }
         },
         computed: {
@@ -492,8 +521,15 @@
                 axios.get('/api/verify_token').then(res => {
                     if (res.data.status === 'success') {
                         this.userRole = res.data.role; this.username = res.data.username;
-                        if (this.hasEditPermission) this.fetchRecentAdditions();
-                        if (this.userRole === 'admin') { this.fetchAdminHistory(); this.fetchUsers(); }
+                        
+                        this.handleSearch();
+                        this.fetchStats(); // 拉取全局统计数据
+                        
+                        if (this.hasEditPermission) {
+                            this.fetchRecentAdditions();
+                            this.fetchAdminHistory();
+                        }
+                        if (this.userRole === 'admin') { this.fetchUsers(); }
                     }
                 });
             },
@@ -504,10 +540,37 @@
                     localStorage.setItem('token', res.data.access_token); localStorage.setItem('role', res.data.role); localStorage.setItem('username', res.data.username);
                     this.isLoggedIn = true; this.userRole = res.data.role; this.username = res.data.username;
                     ElementPlus.ElMessage.success('欢迎回来！');
-                    if (this.hasEditPermission) this.fetchRecentAdditions();
-                    if (this.userRole === 'admin') { this.fetchAdminHistory(); this.fetchUsers(); }
+                    
+                    this.handleSearch();
+                    this.fetchStats(); // 拉取全局统计数据
+
+                    if (this.hasEditPermission) {
+                        this.fetchRecentAdditions();
+                        this.fetchAdminHistory();
+                    }
+                    if (this.userRole === 'admin') { this.fetchUsers(); }
                 }).finally(() => { this.isLoggingIn = false; });
             },
+            
+            // 新增：拉取总词条数量并触发老虎机动画
+            fetchStats() {
+                axios.get('/api/stats').then(res => {
+                    const totalStr = String(res.data.total);
+                    // 如果位数变化，或首次加载，初始化为0再触发动画
+                    if (this.paddedTotal.length !== totalStr.length) {
+                        this.paddedTotal = Array.from({length: totalStr.length}, () => '0');
+                        this.rollTarget = Array.from({length: totalStr.length}, () => 0);
+                        this.$nextTick(() => {
+                            setTimeout(() => {
+                                this.rollTarget = totalStr.split('').map(Number);
+                            }, 50);
+                        });
+                    } else {
+                        this.rollTarget = totalStr.split('').map(Number);
+                    }
+                });
+            },
+
             handleRegister() {
                 if(this.registerForm.password !== this.registerForm.confirmPassword) return ElementPlus.ElMessage.warning('两次密码不一致！');
                 this.isRegistering = true; const fd = new FormData(); fd.append('username', this.registerForm.username); fd.append('password', this.registerForm.password);
@@ -544,8 +607,8 @@
                     axios.post('/api/history/batch_delete', fd).then(res => {
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
-                            this.fetchMyUploads(); this.fetchRecentAdditions();
-                            if(this.userRole === 'admin') this.fetchAdminHistory();
+                            this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); // 刷新总数
+                            if(this.hasEditPermission) this.fetchAdminHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
                 }).catch(() => {});
@@ -579,10 +642,9 @@
             },
 
             handleSearch() {
-                if(!this.searchKeyword) return;
                 axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
                     this.searchResults = res.data.data;
-                    if(this.searchResults.length === 0) ElementPlus.ElMessage.warning('未能匹配到结果');
+                    if(this.searchResults.length === 0 && this.searchKeyword) ElementPlus.ElMessage.warning('未能匹配到结果');
                 });
             },
             copyText(text) {
@@ -592,18 +654,22 @@
             openSearchEditDialog(zh_text, en_text, category) { this.searchEditForm = { old_zh: zh_text, old_en: en_text, new_zh: zh_text, new_en: en_text, category: category || '' }; this.searchEditDialogVisible = true; },
             submitSearchEdit() {
                 this.isEditingSearch = true; const fd = new FormData(); fd.append('old_zh', this.searchEditForm.old_zh); fd.append('old_en', this.searchEditForm.old_en); fd.append('new_zh', this.searchEditForm.new_zh); fd.append('new_en', this.searchEditForm.new_en); fd.append('category', this.searchEditForm.category);
-                axios.post('/api/edit_signage', fd).then(res => { if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.searchEditDialogVisible = false; this.handleSearch(); if(this.userRole === 'admin') this.fetchAdminHistory(); } else ElementPlus.ElMessage.error(res.data.msg); }).finally(() => { this.isEditingSearch = false; });
+                axios.post('/api/edit_signage', fd).then(res => { if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.searchEditDialogVisible = false; this.handleSearch(); if(this.hasEditPermission) this.fetchAdminHistory(); } else ElementPlus.ElMessage.error(res.data.msg); }).finally(() => { this.isEditingSearch = false; });
             },
             deleteTranslation(zh, en) {
                 ElementPlus.ElMessageBox.confirm(`确定删除?`, '警告', { type: 'warning' }).then(() => {
                     const fd = new FormData(); fd.append('zh_term', zh); fd.append('en_translation', en);
-                    axios.post('/api/delete_signage', fd).then(res => { if(res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(); if(this.userRole === 'admin') this.fetchAdminHistory(); } });
+                    axios.post('/api/delete_signage', fd).then(res => { if(res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(); this.fetchStats(); /*刷新总数*/ if(this.hasEditPermission) this.fetchAdminHistory(); } });
                 }).catch(() => {});
             },
 
             submitSingle() {
                 this.isSubmitting = true; const fd = new FormData(); fd.append('zh_text', this.singleForm.zh_text); fd.append('en_text', this.singleForm.en_text);
-                axios.post('/api/add_single', fd).then(res => { ElementPlus.ElMessage.success(res.data.msg); this.singleForm.zh_text = ''; this.singleForm.en_text = ''; this.fetchRecentAdditions(); if(this.userRole === 'admin') this.fetchAdminHistory(); }).finally(() => { this.isSubmitting = false; })
+                axios.post('/api/add_single', fd).then(res => { 
+                    // 这里也配置了 10秒留存
+                    ElementPlus.ElMessage({ message: res.data.msg, type: 'success', duration: 10000, showClose: true });
+                    this.singleForm.zh_text = ''; this.singleForm.en_text = ''; this.fetchRecentAdditions(); this.fetchStats(); /*刷新总数*/ if(this.hasEditPermission) this.fetchAdminHistory(); 
+                }).finally(() => { this.isSubmitting = false; })
             },
             matchUpload(options) {
                 const formData = new FormData(); formData.append('file', options.file);
@@ -624,7 +690,22 @@
                 let url = options.file.name.endsWith('.xlsx') ? '/api/upload_excel' : '/api/upload_docx';
                 this.uploading = true; this.uploadPercent = 0; this.uploadStatusText = '入库处理中...';
                 axios.post(url, formData, { onUploadProgress: p => { this.uploadPercent = Math.round((p.loaded * 100) / p.total); } }).then(res => {
-                    if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.fetchRecentAdditions(); if(this.userRole==='admin') this.fetchAdminHistory(); options.onSuccess(res.data); } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
+                    if (res.data.status === 'success') { 
+                        // 将停留时间延长到 10000ms (10秒)
+                        ElementPlus.ElMessage({
+                            message: res.data.msg,
+                            type: 'success',
+                            duration: 10000,
+                            showClose: true
+                        });
+                        this.fetchRecentAdditions(); 
+                        this.fetchStats(); // 刷新总数
+                        if(this.hasEditPermission) this.fetchAdminHistory(); 
+                        options.onSuccess(res.data); 
+                    } else { 
+                        ElementPlus.ElMessage.error(res.data.msg); 
+                        options.onError(); 
+                    }
                 }).finally(() => { setTimeout(() => { this.uploading = false; }, 1000); });
             },
             
@@ -641,7 +722,7 @@
                 axios.post('/api/history/update', fd).then(res => { if(res.data.status === 'success') { 
                     ElementPlus.ElMessage.success(res.data.msg); 
                     this.historyEditDialogVisible = false; 
-                    if(this.userRole === 'admin') this.fetchAdminHistory(); 
+                    if(this.hasEditPermission) this.fetchAdminHistory(); 
                     if(this.profileDrawerVisible) this.fetchMyUploads();
                 } }).finally(() => { this.isEditingHistory = false; });
             },
@@ -651,6 +732,7 @@
                     axios.post('/api/history/delete', fd).then(res => { 
                         if(res.data.status === 'success') { 
                             ElementPlus.ElMessage.success('已清退数据'); 
+                            this.fetchStats(); // 刷新总数
                             if(isAdminTab) this.fetchAdminHistory(); 
                             if(this.profileDrawerVisible) this.fetchMyUploads();
                         } 
