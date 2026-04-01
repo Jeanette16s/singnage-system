@@ -22,7 +22,8 @@ from utils import process_dataframe_pipeline, get_sort_key
 # ================= 安全与鉴权配置 =================
 SECRET_KEY = "your-super-secret-key-change-this-in-production"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 
+# 将 Token 有效期设为 30 天，配合前端实现“30天内免密自动登录”
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
@@ -41,7 +42,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="无法验证凭证或登录已过期，请重新登录", headers={"WWW-Authenticate": "Bearer"},
+        status_code=status.HTTP_401_UNAUTHORIZED, detail="凭证无效或已过期，请重新登录", headers={"WWW-Authenticate": "Bearer"},
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -127,25 +128,27 @@ def register(username: str = Form(...), password: str = Form(...), db: Session =
         return {"status": "error", "msg": "用户名已被占用，请换一个试试！"}
     if len(password) < 6:
         return {"status": "error", "msg": "密码长度不能少于6位！"}
-    
     new_user = User(username=username, hashed_password=get_password_hash(password), role="viewer")
     db.add(new_user)
     db.commit()
     return {"status": "success", "msg": "注册成功！请使用新账号登录。"}
 
+@app.get("/api/verify_token")
+def verify_token(current_user: User = Depends(get_current_user)):
+    return {"status": "success", "role": current_user.role, "username": current_user.username}
+
 @app.get("/api/users")
 def get_users(db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     users = db.query(User).all()
-    return {"data": [{"id": u.id, "username": u.username, "role": u.role, "created_at": u.created_at} for u in users]}
+    # 修复时区：SQLite存的func.now()为UTC，补偿8小时转换为北京时间
+    return {"data": [{"id": u.id, "username": u.username, "role": u.role, "created_at": u.created_at + timedelta(hours=8) if u.created_at else None} for u in users]}
 
 @app.post("/api/users/role")
 def update_user_role(user_id: int = Form(...), role: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     if role not in ["admin", "editor", "viewer"]: return {"status": "error", "msg": "非法的角色！"}
-    
     user = db.query(User).filter(User.id == user_id).first()
     if not user: return {"status": "error", "msg": "找不到该用户"}
     if user.username == "admin" and role != "admin": return {"status": "error", "msg": "为防止系统失控，禁止修改初始 admin 的权限！"}
-    
     user.role = role
     db.commit()
     return {"status": "success", "msg": f"已将 {user.username} 的权限更新为 {role}"}
@@ -163,16 +166,11 @@ def delete_user(user_id: int = Form(...), db: Session = Depends(get_db), current
 
 @app.get("/")
 async def read_root():
-    # 修复路径Bug：增加优先从同级目录加载 index.html 的逻辑
     base_path = get_resource_path("index.html")
     template_path = get_resource_path(os.path.join("templates", "index.html"))
-    
-    if os.path.exists(base_path):
-        return FileResponse(base_path)
-    elif os.path.exists(template_path):
-        return FileResponse(template_path)
-    else:
-        raise HTTPException(status_code=404, detail="未找到 index.html，请确保其与 main.py 处于同级目录或 templates 文件夹下。")
+    if os.path.exists(base_path): return FileResponse(base_path)
+    elif os.path.exists(template_path): return FileResponse(template_path)
+    else: raise HTTPException(status_code=404, detail="未找到 index.html")
 
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
@@ -228,6 +226,16 @@ def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str =
     db.add(ActionHistory(action_type="编辑", zh_term=clean_new_zh, en_translation=clean_new_en, category=category))
     db.commit()
     return {"status": "success", "msg": "词条修改成功！"}
+
+@app.post("/api/delete_signage")
+def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    record = db.query(Signage).filter(Signage.zh_term == zh_term, Signage.en_translation == en_translation).first()
+    if not record: 
+        return {"status": "error", "msg": "找不到该词条，可能已被删除"}
+    db.delete(record)
+    db.add(ActionHistory(action_type="删除译文", zh_term=zh_term, en_translation=en_translation, category=record.category))
+    db.commit()
+    return {"status": "success", "msg": "译文已成功删除！"}
 
 @app.post("/api/add_single")
 def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
@@ -349,12 +357,85 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
     result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
     return {"status": "success", "data": result_list, "extracted_count": len(extracted_zh_terms)}
 
+@app.post("/api/match_excel")
+async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """仅提取 Excel 中的“公示语中文”列并去词库中比对"""
+    if not file.filename.endswith('.xlsx'):
+        return {"status": "error", "msg": "请上传 .xlsx 格式的 Excel 文档！"}
+
+    contents = await file.read()
+    try:
+        df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
+        if '公示语中文' not in df.columns:
+            return {"status": "error", "msg": "Excel文档必须包含名为 '公示语中文' 的表头列！"}
+    except Exception as e:
+        return {"status": "error", "msg": f"读取 Excel 文档失败: {e}"}
+
+    extracted_zh_terms = set()
+    for zh_val in df['公示语中文'].dropna():
+        raw_sign = str(zh_val).strip()
+        if len(raw_sign) > 1000 or not raw_sign:
+            continue
+        clean_zh = extract_zh_sign(raw_sign)
+        if clean_zh and clean_zh.lower() != 'nan':
+            extracted_zh_terms.add(clean_zh)
+
+    if not extracted_zh_terms:
+        return {"status": "error", "msg": "未能从 Excel 的 '公示语中文' 列提取到有效的标识文本。"}
+
+    clean_extracted = {term.replace('\n', '').replace('\r', '').replace(' ', '') for term in extracted_zh_terms}
+    db_zh_clean = func.replace(func.replace(func.replace(Signage.zh_term, '\n', ''), '\r', ''), ' ', '')
+    matched = db.query(Signage).filter(db_zh_clean.in_(clean_extracted)).all()
+
+    seq_ids = [m.sequence_id for m in matched if m.sequence_id]
+    associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
+        
+    grouped = {}
+    for item in matched:
+        if item.zh_term not in grouped:
+            grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        grouped[item.zh_term]["translations"].add(item.en_translation)
+
+    all_associated_items = {item.id: item for item in associated}.values()
+    for zh, data in grouped.items():
+        data["translations"] = list(data["translations"])
+        if data["seq_id"]:
+            bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
+            bros.sort(key=lambda x: x.sequence_order or 0)
+            seen_bro_zh = set()
+            for b in bros:
+                if b.zh_term not in seen_bro_zh:
+                    data["associated_items"].append({"zh_text": b.zh_term, "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term], "order": b.sequence_order})
+                    seen_bro_zh.add(b.zh_term)
+
+    result_list = list(grouped.values())
+    result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
+    
+    return {
+        "status": "success", 
+        "data": result_list, 
+        "extracted_count": len(extracted_zh_terms)
+    }
+
 @app.get("/api/history")
 def get_history(category: str = "", limit: int = 100, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
     records = query.order_by(ActionHistory.created_at.desc()).limit(limit).all()
-    return {"data": records}
+    
+    # 修复时区：SQLite数据库存的 func.now() 为 UTC，提取时统一补偿 8 小时转为北京时间
+    result = []
+    for r in records:
+        bj_time = r.created_at + timedelta(hours=8) if r.created_at else None
+        result.append({
+            "id": r.id,
+            "action_type": r.action_type,
+            "zh_term": r.zh_term,
+            "en_translation": r.en_translation,
+            "category": r.category,
+            "created_at": bj_time
+        })
+    return {"data": result}
 
 @app.post("/api/history/update")
 def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation: str = Form(...), category: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
@@ -383,7 +464,10 @@ def export_history(category: str = "", db: Session = Depends(get_db), current_us
     query = db.query(ActionHistory)
     if category: query = query.filter(ActionHistory.category == category)
     records = query.order_by(ActionHistory.created_at.desc()).all()
-    data = [{"操作类型": r.action_type, "公示语中文": r.zh_term, "英文译文": r.en_translation, "公示语分类": r.category, "操作时间": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""} for r in records]
+    
+    # 修复时区：Excel 导出补偿 8 小时转为北京时间
+    data = [{"操作类型": r.action_type, "公示语中文": r.zh_term, "英文译文": r.en_translation, "公示语分类": r.category, "操作时间": (r.created_at + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.created_at else ""} for r in records]
+    
     df = pd.DataFrame(data)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='历史记录')
