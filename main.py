@@ -174,7 +174,6 @@ async def read_root():
     elif os.path.exists(template_path): return FileResponse(template_path)
     else: raise HTTPException(status_code=404, detail="未找到 index.html")
 
-# 新增：独立接口用于提供词库总数据量
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     count = db.query(Signage.zh_term).filter(
@@ -232,17 +231,28 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
                     
     result_list = list(grouped.values())
     
-    # 辅助排序：判断首字符是否为数字，实现数字沉底
-    def is_numeric_start(text):
+    # 核心优化：智能检测首字符进行分层，过滤括号等标点符号
+    def get_sort_group(text):
         clean_text = str(text).strip()
-        return 1 if clean_text and clean_text[0].isdigit() else 0
+        # 匹配第一个数字、字母或中文字符
+        match = re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', clean_text)
+        if not match:
+            return 1 # 若全为符号，放中间
+        first_char = match.group(0)
+        
+        if re.match(r'[\u4e00-\u9fa5]', first_char):
+            return 0  # 中文汉字最高优先级（排最前面）
+        elif first_char.isdigit():
+            return 2  # 数字最低优先级（沉底）
+        else:
+            return 1  # 英文字母放中间
 
     if not clean_keyword:
-        # 数字开头的沉底 -> 拼音排序
-        result_list.sort(key=lambda x: (is_numeric_start(x["zh_text"]), get_sort_key(x["zh_text"])))
+        # 空搜时：中文 -> 英文/符号 -> 数字，然后再按拼音排序
+        result_list.sort(key=lambda x: (get_sort_group(x["zh_text"]), get_sort_key(x["zh_text"])))
     else:
-        # 匹配度降序 -> 数字沉底 -> 拼音排序
-        result_list.sort(key=lambda x: (-x["match_score"], is_numeric_start(x["zh_text"]), get_sort_key(x["zh_text"])))
+        # 搜索时：按 匹配度降序 -> 字符分组优先级 -> 拼音排序
+        result_list.sort(key=lambda x: (-x["match_score"], get_sort_group(x["zh_text"]), get_sort_key(x["zh_text"])))
         
     return {"data": result_list}
 
