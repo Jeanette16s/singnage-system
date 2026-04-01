@@ -111,6 +111,35 @@ def extract_en_suggestion(text: str) -> str:
     cleaned = re.sub(r'[\u4e00-\u9fa5：，。！？、\n]+', ' ', text)
     return cleaned.strip()
 
+# ================= 高级排序规则 =================
+def advanced_sort_key(text):
+    """
+    忽略前导符号，精准查找第一个有效字符：
+    1级：中文
+    2级：数字
+    3级：英文字母
+    4级：纯符号(兜底)
+    """
+    clean_text = str(text).strip()
+    match = re.search(r'([\u4e00-\u9fa5a-zA-Z0-9])', clean_text)
+    
+    if not match:
+        return (4, get_sort_key(clean_text))
+    
+    first_char = match.group(1)
+    
+    if '\u4e00' <= first_char <= '\u9fa5':
+        priority = 1
+    elif first_char.isdigit():
+        priority = 2
+    else:  # isalpha
+        priority = 3
+        
+    # 从第一个有效字符开始提取内容，抹除开头的符号进行拼音排序
+    sort_content = clean_text[match.start():]
+    return (priority, get_sort_key(sort_content))
+
+
 # ================= 认证与用户管理路由 =================
 @app.post("/api/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -230,29 +259,13 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
                     seen_bro_zh.add(b.zh_term)
                     
     result_list = list(grouped.values())
-    
-    # 核心优化：智能检测首字符进行分层，过滤括号等标点符号
-    def get_sort_group(text):
-        clean_text = str(text).strip()
-        # 匹配第一个数字、字母或中文字符
-        match = re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', clean_text)
-        if not match:
-            return 1 # 若全为符号，放中间
-        first_char = match.group(0)
-        
-        if re.match(r'[\u4e00-\u9fa5]', first_char):
-            return 0  # 中文汉字最高优先级（排最前面）
-        elif first_char.isdigit():
-            return 2  # 数字最低优先级（沉底）
-        else:
-            return 1  # 英文字母放中间
 
     if not clean_keyword:
-        # 空搜时：中文 -> 英文/符号 -> 数字，然后再按拼音排序
-        result_list.sort(key=lambda x: (get_sort_group(x["zh_text"]), get_sort_key(x["zh_text"])))
+        # 空搜时：中文 > 数字 > 字母 (穿透符号)
+        result_list.sort(key=lambda x: advanced_sort_key(x["zh_text"]))
     else:
-        # 搜索时：按 匹配度降序 -> 字符分组优先级 -> 拼音排序
-        result_list.sort(key=lambda x: (-x["match_score"], get_sort_group(x["zh_text"]), get_sort_key(x["zh_text"])))
+        # 搜索时：按匹配度优先 -> 中文 > 数字 > 字母 (穿透符号)
+        result_list.sort(key=lambda x: (-x["match_score"], advanced_sort_key(x["zh_text"])))
         
     return {"data": result_list}
 
@@ -397,7 +410,7 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
                     data["associated_items"].append({"zh_text": b.zh_term, "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term], "order": b.sequence_order})
                     seen_bro_zh.add(b.zh_term)
     result_list = list(grouped.values())
-    result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
+    result_list.sort(key=lambda x: advanced_sort_key(x["zh_text"]))
     return {"status": "success", "data": result_list, "extracted_count": len(extracted_zh_terms)}
 
 @app.post("/api/match_excel")
@@ -436,7 +449,7 @@ async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db
                     data["associated_items"].append({"zh_text": b.zh_term, "en_texts": [x.en_translation for x in bros if x.zh_term == b.zh_term], "order": b.sequence_order})
                     seen_bro_zh.add(b.zh_term)
     result_list = list(grouped.values())
-    result_list.sort(key=lambda x: get_sort_key(x["zh_text"]))
+    result_list.sort(key=lambda x: advanced_sort_key(x["zh_text"]))
     return {"status": "success", "data": result_list, "extracted_count": len(extracted_zh_terms)}
 
 # ================= 历史记录与管理接口 =================
