@@ -174,14 +174,16 @@
                 </div>
 
                 <div class="search-bar">
-                    <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch" style="flex: 1;"></el-input>
-                    <el-button @click="handleSearch" type="primary">搜索</el-button>
+                    <!-- 搜索触发时，不保留分页进度 (false) -->
+                    <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch(false)" style="flex: 1;"></el-input>
+                    <el-button @click="handleSearch(false)" type="primary">搜索</el-button>
                 </div>
                 
                 <el-empty v-if="searchResults.length === 0 && searchKeyword" description="暂无搜索结果" image-size="120"></el-empty>
                 <el-empty v-else-if="searchResults.length === 0" description="词库为空" image-size="120"></el-empty>
                 
-                <el-card class="box-card" v-for="item in searchResults" :key="item.zh_text">
+                <!-- 替换为渲染 displayedResults 虚拟分页 -->
+                <el-card class="box-card" v-for="item in displayedResults" :key="item.zh_text">
                     <template #header>
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div><span class="zh-title">{{ item.zh_text }}</span></div>
@@ -217,6 +219,13 @@
                         </div>
                     </div>
                 </el-card>
+
+                <!-- 增加加载更多按钮 -->
+                <div v-if="searchResults.length > displayedCount" style="text-align: center; margin: 30px 0;">
+                    <el-button type="primary" plain size="large" @click="loadMore" style="width: 250px;">
+                        加载更多 (还有 {{ searchResults.length - displayedCount }} 条)
+                    </el-button>
+                </div>
             </el-tab-pane>
 
             <el-tab-pane>
@@ -489,7 +498,10 @@
                 registerForm: { username: '', password: '', confirmPassword: '' }, isRegistering: false,
                 usersData: [],
 
-                searchKeyword: '', searchResults: [],
+                searchKeyword: '', 
+                searchResults: [], 
+                displayedCount: 50, // 新增：控制虚拟分页显示数量
+                
                 singleForm: { zh_text: '', en_text: '' }, isSubmitting: false,
                 uploading: false, uploadPercent: 0, uploadStatusText: '',
                 recentAdditions: [],
@@ -510,18 +522,27 @@
             }
         },
         computed: {
-            hasEditPermission() { return this.userRole === 'admin' || this.userRole === 'editor'; }
+            hasEditPermission() { return this.userRole === 'admin' || this.userRole === 'editor'; },
+            // 新增计算属性：截取前 displayedCount 条进行页面渲染
+            displayedResults() {
+                return this.searchResults.slice(0, this.displayedCount);
+            }
         },
         mounted() {
             if (this.isLoggedIn) this.verifyToken();
         },
         methods: {
+            // 新增：加载更多按钮方法
+            loadMore() {
+                this.displayedCount += 50;
+            },
+
             verifyToken() {
                 axios.get('/api/verify_token').then(res => {
                     if (res.data.status === 'success') {
                         this.userRole = res.data.role; this.username = res.data.username;
                         
-                        this.handleSearch();
+                        this.handleSearch(false);
                         this.fetchStats(); 
                         
                         if (this.hasEditPermission) {
@@ -540,7 +561,7 @@
                     this.isLoggedIn = true; this.userRole = res.data.role; this.username = res.data.username;
                     ElementPlus.ElMessage.success('欢迎回来！');
                     
-                    this.handleSearch();
+                    this.handleSearch(false);
                     this.fetchStats(); 
 
                     if (this.hasEditPermission) {
@@ -605,6 +626,7 @@
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
                             this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); 
+                            this.handleSearch(true); // 后台删除可能影响搜索列表
                             if(this.hasEditPermission) this.fetchAdminHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
@@ -638,9 +660,14 @@
                 }).catch(() => {});
             },
 
-            handleSearch() {
+            // 增加参数 preservePage: 为 true 时不清空已加载的数量进度
+            handleSearch(preservePage = false) {
+                const keepPage = preservePage === true;
                 axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
                     this.searchResults = res.data.data;
+                    if (!keepPage) {
+                        this.displayedCount = 50; // 重置虚拟分页
+                    }
                     if(this.searchResults.length === 0 && this.searchKeyword) ElementPlus.ElMessage.warning('未能匹配到结果');
                 });
             },
@@ -651,12 +678,26 @@
             openSearchEditDialog(zh_text, en_text, category) { this.searchEditForm = { old_zh: zh_text, old_en: en_text, new_zh: zh_text, new_en: en_text, category: category || '' }; this.searchEditDialogVisible = true; },
             submitSearchEdit() {
                 this.isEditingSearch = true; const fd = new FormData(); fd.append('old_zh', this.searchEditForm.old_zh); fd.append('old_en', this.searchEditForm.old_en); fd.append('new_zh', this.searchEditForm.new_zh); fd.append('new_en', this.searchEditForm.new_en); fd.append('category', this.searchEditForm.category);
-                axios.post('/api/edit_signage', fd).then(res => { if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.searchEditDialogVisible = false; this.handleSearch(); if(this.hasEditPermission) this.fetchAdminHistory(); } else ElementPlus.ElMessage.error(res.data.msg); }).finally(() => { this.isEditingSearch = false; });
+                axios.post('/api/edit_signage', fd).then(res => { 
+                    if (res.data.status === 'success') { 
+                        ElementPlus.ElMessage.success(res.data.msg); 
+                        this.searchEditDialogVisible = false; 
+                        this.handleSearch(true); // 传入 true 以保留页面滚动和加载状态
+                        if(this.hasEditPermission) this.fetchAdminHistory(); 
+                    } else ElementPlus.ElMessage.error(res.data.msg); 
+                }).finally(() => { this.isEditingSearch = false; });
             },
             deleteTranslation(zh, en) {
                 ElementPlus.ElMessageBox.confirm(`确定删除?`, '警告', { type: 'warning' }).then(() => {
                     const fd = new FormData(); fd.append('zh_term', zh); fd.append('en_translation', en);
-                    axios.post('/api/delete_signage', fd).then(res => { if(res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(); this.fetchStats(); /*刷新总数*/ if(this.hasEditPermission) this.fetchAdminHistory(); } });
+                    axios.post('/api/delete_signage', fd).then(res => { 
+                        if(res.data.status === 'success') { 
+                            ElementPlus.ElMessage.success(res.data.msg); 
+                            this.handleSearch(true); // 传入 true 以保留页面滚动和加载状态
+                            this.fetchStats(); 
+                            if(this.hasEditPermission) this.fetchAdminHistory(); 
+                        } 
+                    });
                 }).catch(() => {});
             },
 
@@ -719,6 +760,7 @@
                     this.historyEditDialogVisible = false; 
                     if(this.hasEditPermission) this.fetchAdminHistory(); 
                     if(this.profileDrawerVisible) this.fetchMyUploads();
+                    this.handleSearch(true);
                 } }).finally(() => { this.isEditingHistory = false; });
             },
             deleteHistoryRecord(id, isAdminTab = false) {
@@ -730,6 +772,7 @@
                             this.fetchStats(); 
                             if(isAdminTab) this.fetchAdminHistory(); 
                             if(this.profileDrawerVisible) this.fetchMyUploads();
+                            this.handleSearch(true);
                         } 
                     });
                 }).catch(() => {});
