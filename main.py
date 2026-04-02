@@ -269,29 +269,61 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
         
     return {"data": result_list}
 
+# ================= 在 app.py 中替换对应的几个核心接口 =================
+
 @app.post("/api/edit_signage")
 def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str = Form(...), new_en: str = Form(...), category: str = Form(""), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     clean_old_zh = old_zh.replace('\r\n', '\n').replace('\r', '')
     clean_old_en = old_en.replace('\r\n', '\n').replace('\r', '')
     clean_new_zh = new_zh.replace('\r\n', '\n').replace('\r', '')
     clean_new_en = new_en.replace('\r\n', '\n').replace('\r', '')
-    record = db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_old_zh, func.replace(Signage.en_translation, '\r', '') == clean_old_en).first()
-    if not record: return {"status": "error", "msg": "在数据库中找不到原始词条，修改失败。"}
+    
+    # 查找所有匹配的记录（防止存在重复数据导致修改不全）
+    records = db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_old_zh, func.replace(Signage.en_translation, '\r', '') == clean_old_en).all()
+    if not records: return {"status": "error", "msg": "在数据库中找不到原始词条，修改失败。"}
+    
     if (clean_old_zh != clean_new_zh or clean_old_en != clean_new_en):
-        if db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_new_zh, func.replace(Signage.en_translation, '\r', '') == clean_new_en).first(): return {"status": "error", "msg": "修改后的组合已存在！"}
-    record.zh_term = clean_new_zh; record.en_translation = clean_new_en; record.category = category
+        if db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_new_zh, func.replace(Signage.en_translation, '\r', '') == clean_new_en).first(): 
+            return {"status": "error", "msg": "修改后的组合已存在！"}
+            
+    # 更新所有查询到的关联重复冗余项
+    for r in records:
+        r.zh_term = clean_new_zh
+        r.en_translation = clean_new_en
+        if category: r.category = category
+        
     db.add(ActionHistory(action_type="编辑", zh_term=clean_new_zh, en_translation=clean_new_en, category=category, username=current_user.username))
     db.commit()
     return {"status": "success", "msg": "词条修改成功！"}
 
+
 @app.post("/api/delete_signage")
 def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
-    record = db.query(Signage).filter(Signage.zh_term == zh_term, Signage.en_translation == en_translation).first()
-    if not record: return {"status": "error", "msg": "找不到该词条，可能已被删除"}
-    db.delete(record)
-    db.add(ActionHistory(action_type="删除译文", zh_term=zh_term, en_translation=en_translation, category=record.category, username=current_user.username))
+    # 1. 净化前端传入的字符串，去除 \r
+    clean_zh = zh_term.replace('\r\n', '\n').replace('\r', '')
+    clean_en = en_translation.replace('\r\n', '\n').replace('\r', '')
+    
+    # 2. 使用 func.replace 让数据库在查询时忽略字段中的 \r，确保能够精准匹配
+    records = db.query(Signage).filter(
+        func.replace(Signage.zh_term, '\r', '') == clean_zh, 
+        func.replace(Signage.en_translation, '\r', '') == clean_en
+    ).all()
+    
+    if not records: 
+        return {"status": "error", "msg": "找不到该词条，可能包含不可见字符或已被删除"}
+    
+    category = records[0].category if records[0].category else ""
+    
+    # 3. 彻底删除匹配到的所有数据行
+    for r in records:
+        db.delete(r)
+        
+    # 4. 记录审计历史
+    db.add(ActionHistory(action_type="删除译文", zh_term=clean_zh, en_translation=clean_en, category=category, username=current_user.username))
     db.commit()
-    return {"status": "success", "msg": "译文已成功删除！"}
+    
+    return {"status": "success", "msg": "词条已成功删除！"}
+
 
 @app.post("/api/add_single")
 def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
@@ -487,15 +519,21 @@ def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation
     db.commit()
     return {"status": "success", "msg": "词条已成功更新！"}
 
+# 同步修补历史记录删除中的逻辑漏洞
 @app.post("/api/history/delete")
 def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record: return {"status": "error", "msg": "找不到该条历史记录"}
-    sign = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).first()
-    if sign: db.delete(sign)
+    
+    # 同样使用 .all() 删除主库中所有被影响的条目
+    sign_records = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).all()
+    for s in sign_records: 
+        db.delete(s)
+        
     db.delete(record)
     db.commit()
     return {"status": "success", "msg": "已永久删除。"}
+
 
 @app.post("/api/history/batch_delete")
 def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
@@ -507,8 +545,12 @@ def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db)
         for r in records:
             if current_user.role != 'admin' and r.username != current_user.username:
                 continue
-            sign = db.query(Signage).filter(Signage.zh_term == r.zh_term, Signage.en_translation == r.en_translation).first()
-            if sign: db.delete(sign)
+            
+            # 使用 .all()
+            sign_records = db.query(Signage).filter(Signage.zh_term == r.zh_term, Signage.en_translation == r.en_translation).all()
+            for s in sign_records: 
+                db.delete(s)
+                
             db.delete(r)
             count += 1
         db.commit()
