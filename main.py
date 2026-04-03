@@ -95,31 +95,51 @@ def extract_zh_sign(text: str) -> str:
                 text = text[:match.start()]
     return text.strip()
 
-def extract_en_suggestion(text: str) -> str:
-    if not text: return ""
-    text = text.replace("：", ":")
-    if "英文:" in text: return text.split("英文:")[1].strip()
-    lines = text.split('\n')
-    en_lines = []
-    for line in lines:
-        if re.search(r'[A-Za-z]', line) and not re.search(r'[\u4e00-\u9fa5]', line): en_lines.append(line.strip())
-    if en_lines: return "\n".join(en_lines)
-    match = re.search(r'[A-Za-z][^\u4e00-\u9fa5]*$', text)
-    if match:
-        eng_part = match.group(0)
-        if re.search(r'[A-Za-z]{2,}', eng_part) or len(re.findall(r'[A-Za-z]', eng_part)) > 2: return eng_part.strip()
-    cleaned = re.sub(r'[\u4e00-\u9fa5：，。！？、\n]+', ' ', text)
-    return cleaned.strip()
+def extract_en_suggestions_list(text: str) -> list:
+    """
+    智能提取英文译文，升级为列表返回：
+    1. 遇到“或”或者“or”将其一分为多条独立记录
+    2. 保留括号内的内容（作为备注），清理游离的中文讨论内容
+    """
+    if not text: return []
+    text = str(text).replace("：", ":")
+    if "英文:" in text: 
+        text = text.split("英文:")[1].strip()
+
+    # 以“或”或“or”为界进行切割（忽略大小写，利用 \b 确保 or 是完整单词）
+    parts = re.split(r'\s*或\s*|\s+\bor\b\s+', text, flags=re.IGNORECASE)
+    
+    results = []
+    for part in parts:
+        part = part.strip()
+        if not part: continue
+        
+        # 1. 提取当前片段中的括号内容
+        brackets = re.findall(r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', part)
+        
+        # 2. 占位保护
+        masked_text = part
+        for i, b in enumerate(brackets):
+            masked_text = masked_text.replace(b, f" __BRK_{i}__ ")
+            
+        # 3. 大扫除：清理非括号内的中文及中文标点
+        masked_text = re.sub(r'[\u4e00-\u9fa5。，、；：“”‘’！？]+', ' ', masked_text)
+        
+        # 4. 还原占位符
+        for i, b in enumerate(brackets):
+            masked_text = masked_text.replace(f" __BRK_{i}__ ", b).replace(f"__BRK_{i}__", b)
+            
+        # 5. 去除多余空格和多余头尾标点
+        cleaned = re.sub(r'\s+', ' ', masked_text).strip()
+        cleaned = re.sub(r'^[,.!?;:]+|[,.!?;:]+$', '', cleaned).strip()
+        
+        if cleaned:
+            results.append(cleaned)
+            
+    return results
 
 # ================= 高级排序规则 =================
 def advanced_sort_key(text):
-    """
-    忽略前导符号，精准查找第一个有效字符：
-    1级：中文
-    2级：数字
-    3级：英文字母
-    4级：纯符号(兜底)
-    """
     clean_text = str(text).strip()
     match = re.search(r'([\u4e00-\u9fa5a-zA-Z0-9])', clean_text)
     
@@ -132,10 +152,9 @@ def advanced_sort_key(text):
         priority = 1
     elif first_char.isdigit():
         priority = 2
-    else:  # isalpha
+    else:  
         priority = 3
         
-    # 从第一个有效字符开始提取内容，抹除开头的符号进行拼音排序
     sort_content = clean_text[match.start():]
     return (priority, get_sort_key(sort_content))
 
@@ -261,15 +280,11 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
     result_list = list(grouped.values())
 
     if not clean_keyword:
-        # 空搜时：中文 > 数字 > 字母 (穿透符号)
         result_list.sort(key=lambda x: advanced_sort_key(x["zh_text"]))
     else:
-        # 搜索时：按匹配度优先 -> 中文 > 数字 > 字母 (穿透符号)
         result_list.sort(key=lambda x: (-x["match_score"], advanced_sort_key(x["zh_text"])))
         
     return {"data": result_list}
-
-# ================= 在 app.py 中替换对应的几个核心接口 =================
 
 @app.post("/api/edit_signage")
 def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str = Form(...), new_en: str = Form(...), category: str = Form(""), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
@@ -278,7 +293,6 @@ def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str =
     clean_new_zh = new_zh.replace('\r\n', '\n').replace('\r', '')
     clean_new_en = new_en.replace('\r\n', '\n').replace('\r', '')
     
-    # 查找所有匹配的记录（防止存在重复数据导致修改不全）
     records = db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_old_zh, func.replace(Signage.en_translation, '\r', '') == clean_old_en).all()
     if not records: return {"status": "error", "msg": "在数据库中找不到原始词条，修改失败。"}
     
@@ -286,7 +300,6 @@ def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str =
         if db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_new_zh, func.replace(Signage.en_translation, '\r', '') == clean_new_en).first(): 
             return {"status": "error", "msg": "修改后的组合已存在！"}
             
-    # 更新所有查询到的关联重复冗余项
     for r in records:
         r.zh_term = clean_new_zh
         r.en_translation = clean_new_en
@@ -296,14 +309,11 @@ def edit_signage(old_zh: str = Form(...), old_en: str = Form(...), new_zh: str =
     db.commit()
     return {"status": "success", "msg": "词条修改成功！"}
 
-
 @app.post("/api/delete_signage")
 def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
-    # 1. 净化前端传入的字符串，去除 \r
     clean_zh = zh_term.replace('\r\n', '\n').replace('\r', '')
     clean_en = en_translation.replace('\r\n', '\n').replace('\r', '')
     
-    # 2. 使用 func.replace 让数据库在查询时忽略字段中的 \r，确保能够精准匹配
     records = db.query(Signage).filter(
         func.replace(Signage.zh_term, '\r', '') == clean_zh, 
         func.replace(Signage.en_translation, '\r', '') == clean_en
@@ -314,23 +324,28 @@ def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db
     
     category = records[0].category if records[0].category else ""
     
-    # 3. 彻底删除匹配到的所有数据行
     for r in records:
         db.delete(r)
         
-    # 4. 记录审计历史
     db.add(ActionHistory(action_type="删除译文", zh_term=clean_zh, en_translation=clean_en, category=category, username=current_user.username))
     db.commit()
-    
     return {"status": "success", "msg": "词条已成功删除！"}
 
 
 @app.post("/api/add_single")
 def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     clean_zh = zh_text.replace('\r\n', '\n').replace('\r', '')
-    clean_en = en_text.replace('\r\n', '\n').replace('\r', '')
-    df = pd.DataFrame([{"公示语中文": clean_zh, "英文译文": clean_en}])
+    raw_en = en_text.replace('\r\n', '\n').replace('\r', '')
+    
+    # 支持单条录入时自动裂变
+    en_list = extract_en_suggestions_list(raw_en)
+    if not en_list:
+        en_list = [raw_en]
+        
+    data_to_add = [{"公示语中文": clean_zh, "英文译文": en} for en in en_list]
+    df = pd.DataFrame(data_to_add)
     processed_list = process_dataframe_pipeline(df)
+    
     added_count = 0
     for item in processed_list:
         if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
@@ -339,6 +354,7 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
             db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
             db.add(ActionHistory(action_type="单条录入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
             added_count += 1
+            
     db.commit()
     return {"status": "success", "msg": f"录入成功，受影响条数：{added_count}"}
 
@@ -348,7 +364,27 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
     try:
         df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
         if '公示语中文' not in df.columns or '英文译文' not in df.columns: return {"status": "error", "msg": "Excel必须包含 '公示语中文' 和 '英文译文' 两列！"}
-        processed_list = process_dataframe_pipeline(df)
+        
+        # 将带有“或”的整行数据进行裂变处理
+        expanded_rows = []
+        for _, row in df.iterrows():
+            en_val = str(row.get('英文译文', ''))
+            if pd.isna(row.get('英文译文')) or not en_val.strip() or en_val.lower() == 'nan':
+                expanded_rows.append(row.to_dict())
+                continue
+                
+            en_list = extract_en_suggestions_list(en_val)
+            if not en_list:
+                expanded_rows.append(row.to_dict())
+            else:
+                for en in en_list:
+                    new_row = row.to_dict()
+                    new_row['英文译文'] = en
+                    expanded_rows.append(new_row)
+                    
+        expanded_df = pd.DataFrame(expanded_rows)
+        processed_list = process_dataframe_pipeline(expanded_df)
+        
         added_count, skip_count = 0, 0
         for item in processed_list:
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
@@ -381,8 +417,14 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
             except Exception: continue 
             if len(raw_sign) > 1000 or len(raw_suggestion) > 1000: continue
             if not raw_sign and not raw_suggestion: continue
-            clean_zh = extract_zh_sign(raw_sign); clean_en = extract_en_suggestion(raw_suggestion)
-            if clean_zh and clean_en: extracted_data.append({"公示语中文": clean_zh, "英文译文": clean_en})
+            
+            clean_zh = extract_zh_sign(raw_sign)
+            # 使用新的数组提取方案
+            clean_en_list = extract_en_suggestions_list(raw_suggestion)
+            if clean_zh and clean_en_list: 
+                for clean_en in clean_en_list:
+                    extracted_data.append({"公示语中文": clean_zh, "英文译文": clean_en})
+                    
     if not extracted_data: return {"status": "error", "msg": "未能在文档中提取到有效数据。"}
     try:
         df = pd.DataFrame(extracted_data)
@@ -519,13 +561,11 @@ def update_history(id: int = Form(...), zh_term: str = Form(...), en_translation
     db.commit()
     return {"status": "success", "msg": "词条已成功更新！"}
 
-# 同步修补历史记录删除中的逻辑漏洞
 @app.post("/api/history/delete")
 def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     record = db.query(ActionHistory).filter(ActionHistory.id == id).first()
     if not record: return {"status": "error", "msg": "找不到该条历史记录"}
     
-    # 同样使用 .all() 删除主库中所有被影响的条目
     sign_records = db.query(Signage).filter(Signage.zh_term == record.zh_term, Signage.en_translation == record.en_translation).all()
     for s in sign_records: 
         db.delete(s)
@@ -546,7 +586,6 @@ def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db)
             if current_user.role != 'admin' and r.username != current_user.username:
                 continue
             
-            # 使用 .all()
             sign_records = db.query(Signage).filter(Signage.zh_term == r.zh_term, Signage.en_translation == r.en_translation).all()
             for s in sign_records: 
                 db.delete(s)
