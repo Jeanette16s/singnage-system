@@ -79,12 +79,55 @@
         .el-tag--danger  { background-color: #F7EAE8; color: var(--el-color-danger); }
         .el-tag--info    { background-color: #EEF0EF; color: var(--el-color-info); }
 
-        .translation-row { display: flex; align-items: center; margin-bottom: 12px; padding: 10px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
-        .translation-tag { font-size: 16px; font-weight: 500; margin-right: 20px; flex: 1; }
-        .action-btns { opacity: 0; transition: opacity 0.3s, transform 0.3s; transform: translateX(-10px); }
+        .translation-row { display: flex; align-items: flex-start; margin-bottom: 12px; padding: 10px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
+        /* ================= 备注悬停效果专属样式 ================= */
+        .trans-text-container {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 0; /* 防止内容过长撑破 flex 容器 */
+        }
+        
+        .remark-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #B83A2D; /* 甲方要求的橘红色 */
+            border-radius: 50%;
+            margin-left: 8px;
+            flex-shrink: 0;
+            box-shadow: 0 0 4px rgba(184, 58, 45, 0.4);
+        }
+        
+        .remark-hover-text {
+            font-size: 13px;
+            color: var(--el-color-info);
+            background: #EAE6DF;
+            padding: 3px 12px;
+            border-radius: 6px;
+            margin-left: 12px;
+            border-left: 3px;
+            opacity: 0;
+            transition: all 0.3s ease;
+            transform: translateX(-10px);
+            pointer-events: none; /* 防止鼠标移入备注框时引起闪烁 */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 350px; /* 限制最大宽度，超长文本显示省略号 */
+        }
+        
+        /* 当鼠标悬停在整行时，显示备注和操作按钮 */
+        .translation-row:hover .remark-hover-text {
+            opacity: 1;
+            transform: translateX(0);
+        }
+        /* ======================================================= */
+        .translation-tag { font-size: 16px; font-weight: 500; }
+        .action-btns { opacity: 0; transition: opacity 0.3s, transform 0.3s; transform: translateX(-10px); display: flex; margin-top: 2px;}
         .translation-row:hover .action-btns { opacity: 1; transform: translateX(0); }
         .action-btns .el-button { border-radius: 8px; border-width: 2px; font-weight: bold; }
-        .delete-trans-btn { color: #C0C4CC; cursor: pointer; margin-left: 15px; padding: 2px; display: flex; align-items: center; border-radius: 50%; transition: all 0.2s ease; }
+        .delete-trans-btn { color: #C0C4CC; cursor: pointer; margin-left: 15px; margin-top: 2px; padding: 2px; display: flex; align-items: center; border-radius: 50%; transition: all 0.2s ease; }
         .delete-trans-btn:hover { color: var(--el-color-danger); background-color: #F7EAE8; }
 
         .asso-container { margin-top: 20px; border-top: 1px dashed var(--el-border-color-light); padding-top: 15px; }
@@ -174,7 +217,6 @@
                 </div>
 
                 <div class="search-bar">
-                    <!-- 搜索触发时，不保留分页进度 (false) -->
                     <el-input type="textarea" :autosize="{ minRows: 1, maxRows: 3 }" v-model="searchKeyword" placeholder="输入中文标语进行检索..." @keydown.enter.prevent="handleSearch(false)" style="flex: 1;"></el-input>
                     <el-button @click="handleSearch(false)" type="primary">搜索</el-button>
                 </div>
@@ -182,7 +224,6 @@
                 <el-empty v-if="searchResults.length === 0 && searchKeyword" description="暂无搜索结果" image-size="120"></el-empty>
                 <el-empty v-else-if="searchResults.length === 0" description="词库为空" image-size="120"></el-empty>
                 
-                <!-- 替换为渲染 displayedResults 虚拟分页 -->
                 <el-card class="box-card" v-for="item in displayedResults" :key="item.zh_text">
                     <template #header>
                         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -194,9 +235,17 @@
                         <span style="font-weight: 600; color: var(--el-color-primary); font-size: 13px; text-transform: uppercase;">Standard Translations</span>
                         <div style="margin-top: 12px;">
                             <div v-for="en in item.translations" :key="en" class="translation-row">
-                                <span class="translation-tag">{{ en }}</span>
+                                <div class="trans-text-container">
+                                    <span class="translation-tag">{{ parseTranslation(en).text }}</span>
+                                    <!-- 仅当存在备注时，渲染橘色小圆点 -->
+                                    <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
+                                    <!-- 悬停时浮现的备注信息（绑定 title 属性以应对超长文本原生提示） -->
+                                    <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
+                                        {{ parseTranslation(en).remark }}
+                                    </span>
+                                </div>
                                 <div class="action-btns">
-                                    <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
+                                    <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
                                     <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
                                 </div>
                                 <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
@@ -220,7 +269,6 @@
                     </div>
                 </el-card>
 
-                <!-- 增加加载更多按钮 -->
                 <div v-if="searchResults.length > displayedCount" style="text-align: center; margin: 30px 0;">
                     <el-button type="primary" plain size="large" @click="loadMore" style="width: 250px;">
                         加载更多 (还有 {{ searchResults.length - displayedCount }} 条)
@@ -259,9 +307,25 @@
                         <template #header><div style="display: flex; justify-content: space-between;"><span class="zh-title">{{ item.zh_text }}</span><el-tag :type="getCategoryType(item.category)">{{ item.category }}</el-tag></div></template>
                         <div style="margin-bottom: 10px;">
                             <div v-for="en in item.translations" :key="en" class="translation-row">
-                                <span class="translation-tag">{{ en }}</span>
+                                <div style="flex: 1; display: flex; flex-direction: column;">
+                                    <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 10px;">
+                                        <span class="translation-tag">{{ parseTranslation(en).text }}</span>
+                                        <el-tag v-if="parseTranslation(en).remark" 
+                                                size="small" 
+                                                type="info" 
+                                                style="cursor: pointer;"
+                                                @click="toggleRemark(en)">
+                                            <el-icon><InfoFilled /></el-icon> 备注信息
+                                        </el-tag>
+                                    </div>
+                                    <el-collapse-transition>
+                                        <div v-show="isRemarkExpanded(en)" style="margin-top: 8px; font-size: 13px; color: var(--el-color-info); background: #EAE6DF; padding: 6px 12px; border-radius: 6px; border-left: 3px solid var(--el-color-warning); width: fit-content;">
+                                            {{ parseTranslation(en).remark }}
+                                        </div>
+                                    </el-collapse-transition>
+                                </div>
                                 <div class="action-btns">
-                                    <el-button size="small" type="primary" plain @click="copyText(en)">复制</el-button>
+                                    <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
                                     <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
                                 </div>
                                 <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
@@ -443,7 +507,7 @@
     <el-dialog title="编辑词库条目" v-model="searchEditDialogVisible" width="550px">
         <el-form :model="searchEditForm" label-position="top">
             <el-form-item label="中文标语"><el-input v-model="searchEditForm.new_zh" type="textarea" :rows="2"></el-input></el-form-item>
-            <el-form-item label="英文译文"><el-input v-model="searchEditForm.new_en" type="textarea" :rows="2"></el-input></el-form-item>
+            <el-form-item label="英文译文（含备注）"><el-input v-model="searchEditForm.new_en" type="textarea" :rows="2"></el-input></el-form-item>
             <el-form-item label="词条分类">
                 <el-select v-model="searchEditForm.category" style="width: 100%;">
                     <el-option label="提示类" value="提示类"></el-option><el-option label="强制类" value="强制类"></el-option>
@@ -458,7 +522,7 @@
     <el-dialog title="修改历史上传记录" v-model="historyEditDialogVisible" width="550px">
         <el-form :model="historyEditForm" label-position="top">
             <el-form-item label="中文标语"><el-input v-model="historyEditForm.zh_term" type="textarea" :rows="2"></el-input></el-form-item>
-            <el-form-item label="英文译文"><el-input v-model="historyEditForm.en_translation" type="textarea" :rows="2"></el-input></el-form-item>
+            <el-form-item label="英文译文（含备注）"><el-input v-model="historyEditForm.en_translation" type="textarea" :rows="2"></el-input></el-form-item>
             <el-form-item label="词条分类">
                 <el-select v-model="historyEditForm.category" style="width: 100%;">
                     <el-option label="提示类" value="提示类"></el-option><el-option label="强制类" value="强制类"></el-option>
@@ -500,7 +564,7 @@
 
                 searchKeyword: '', 
                 searchResults: [], 
-                displayedCount: 50, // 新增：控制虚拟分页显示数量
+                displayedCount: 50, 
                 
                 singleForm: { zh_text: '', en_text: '' }, isSubmitting: false,
                 uploading: false, uploadPercent: 0, uploadStatusText: '',
@@ -518,24 +582,51 @@
                 historyEditDialogVisible: false, isEditingHistory: false, historyEditForm: { id: null, zh_term: '', en_translation: '', category: '' },
                 
                 paddedTotal: [],
-                rollTarget: []
+                rollTarget: [],
+                
+                // 新增：维护当前展开备注的译文数组
+                expandedRemarks: [] 
             }
         },
         computed: {
             hasEditPermission() { return this.userRole === 'admin' || this.userRole === 'editor'; },
-            // 新增计算属性：截取前 displayedCount 条进行页面渲染
-            displayedResults() {
-                return this.searchResults.slice(0, this.displayedCount);
-            }
+            displayedResults() { return this.searchResults.slice(0, this.displayedCount); }
         },
         mounted() {
             if (this.isLoggedIn) this.verifyToken();
         },
         methods: {
-            // 新增：加载更多按钮方法
-            loadMore() {
-                this.displayedCount += 50;
+            // ================= 新增：解析译文备注与交互逻辑 =================
+            parseTranslation(fullText) {
+                if (!fullText) return { text: '', remark: '' };
+                
+                // 匹配任意类型括号包裹的内容
+                const remarkMatches = fullText.match(/[(（\[【].*?[)）\]】]/g);
+                if (remarkMatches) {
+                    // 去除两端括号，仅保留内部干净的文本
+                    const cleanRemarks = remarkMatches.map(m => m.substring(1, m.length - 1).trim());
+                    const remark = cleanRemarks.join(' ； ');
+                    
+                    // 将纯英文部分的文本抽离
+                    const text = fullText.replace(/[(（\[【].*?[)）\]】]/g, '').trim();
+                    return { text, remark };
+                }
+                return { text: fullText, remark: '' };
             },
+            toggleRemark(en) {
+                const idx = this.expandedRemarks.indexOf(en);
+                if (idx > -1) {
+                    this.expandedRemarks.splice(idx, 1);
+                } else {
+                    this.expandedRemarks.push(en);
+                }
+            },
+            isRemarkExpanded(en) {
+                return this.expandedRemarks.includes(en);
+            },
+            // =============================================================
+
+            loadMore() { this.displayedCount += 50; },
 
             verifyToken() {
                 axios.get('/api/verify_token').then(res => {
@@ -626,7 +717,7 @@
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
                             this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); 
-                            this.handleSearch(true); // 后台删除可能影响搜索列表
+                            this.handleSearch(true); 
                             if(this.hasEditPermission) this.fetchAdminHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
@@ -660,20 +751,19 @@
                 }).catch(() => {});
             },
 
-            // 增加参数 preservePage: 为 true 时不清空已加载的数量进度
             handleSearch(preservePage = false) {
                 const keepPage = preservePage === true;
                 axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
                     this.searchResults = res.data.data;
                     if (!keepPage) {
-                        this.displayedCount = 50; // 重置虚拟分页
+                        this.displayedCount = 50; 
                     }
                     if(this.searchResults.length === 0 && this.searchKeyword) ElementPlus.ElMessage.warning('未能匹配到结果');
                 });
             },
             copyText(text) {
-                if(navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(() => ElementPlus.ElMessage.success('已复制')); } 
-                else { let t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); ElementPlus.ElMessage.success('已复制'); t.remove(); }
+                if(navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(() => ElementPlus.ElMessage.success('译文已复制')); } 
+                else { let t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); ElementPlus.ElMessage.success('译文已复制'); t.remove(); }
             },
             openSearchEditDialog(zh_text, en_text, category) { this.searchEditForm = { old_zh: zh_text, old_en: en_text, new_zh: zh_text, new_en: en_text, category: category || '' }; this.searchEditDialogVisible = true; },
             submitSearchEdit() {
@@ -682,7 +772,7 @@
                     if (res.data.status === 'success') { 
                         ElementPlus.ElMessage.success(res.data.msg); 
                         this.searchEditDialogVisible = false; 
-                        this.handleSearch(true); // 传入 true 以保留页面滚动和加载状态
+                        this.handleSearch(true); 
                         if(this.hasEditPermission) this.fetchAdminHistory(); 
                     } else ElementPlus.ElMessage.error(res.data.msg); 
                 }).finally(() => { this.isEditingSearch = false; });
@@ -693,7 +783,7 @@
                     axios.post('/api/delete_signage', fd).then(res => { 
                         if(res.data.status === 'success') { 
                             ElementPlus.ElMessage.success(res.data.msg); 
-                            this.handleSearch(true); // 传入 true 以保留页面滚动和加载状态
+                            this.handleSearch(true); 
                             this.fetchStats(); 
                             if(this.hasEditPermission) this.fetchAdminHistory(); 
                         } 
