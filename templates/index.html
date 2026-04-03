@@ -80,19 +80,20 @@
         .el-tag--info    { background-color: #EEF0EF; color: var(--el-color-info); }
 
         .translation-row { display: flex; align-items: flex-start; margin-bottom: 12px; padding: 10px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
-        /* ================= 备注悬停效果专属样式 ================= */
+        /* ================= 备注悬停气泡样式重构 ================= */
         .trans-text-container {
+            position: relative; /* 设定为绝对定位的基准点 */
             display: flex;
             align-items: center;
             flex: 1;
-            min-width: 0; /* 防止内容过长撑破 flex 容器 */
+            min-width: 0;
         }
         
         .remark-dot {
             display: inline-block;
             width: 6px;
             height: 6px;
-            background-color: #B83A2D; /* 甲方要求的橘红色 */
+            background-color: #B83A2D;
             border-radius: 50%;
             margin-left: 8px;
             flex-shrink: 0;
@@ -100,27 +101,34 @@
         }
         
         .remark-hover-text {
+            position: absolute; /* 完全脱离文档流，永不被挤压 */
+            left: 0; 
+            bottom: 100%; /* 悬浮在译文正上方 */
+            margin-bottom: 6px; /* 留出一点距离 */
+            z-index: 100;
             font-size: 13px;
-            color: var(--el-color-info);
-            background: #EAE6DF;
-            padding: 3px 12px;
-            border-radius: 6px;
-            margin-left: 12px;
-            border-left: 3px solid #B83A2D;
+            color: var(--el-text-color-regular);
+            background: #ffffff; /* 纯白不透明背景 */
+            padding: 8px 14px;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12); /* 柔和的高级阴影 */
+            border: 1px solid var(--el-border-color-lighter); /* 细微边框替代红色竖条 */
             opacity: 0;
-            transition: all 0.3s ease;
-            transform: translateX(-10px);
-            pointer-events: none; /* 防止鼠标移入备注框时引起闪烁 */
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 350px; /* 限制最大宽度，超长文本显示省略号 */
+            visibility: hidden;
+            transform: translateY(10px);
+            transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+            white-space: normal; /* 允许文本自然换行 */
+            width: max-content;
+            max-width: 320px; /* 限制最大宽度，超长文本自动换行向下延伸 */
+            line-height: 1.5;
+            pointer-events: none; /* 防止遮挡下方元素的交互 */
         }
         
-        /* 当鼠标悬停在整行时，显示备注和操作按钮 */
+        /* 鼠标悬停到整行时平滑浮现气泡 */
         .translation-row:hover .remark-hover-text {
             opacity: 1;
-            transform: translateX(0);
+            visibility: visible;
+            transform: translateY(0);
         }
         /* ======================================================= */
         .translation-tag { font-size: 16px; font-weight: 500; }
@@ -588,23 +596,26 @@
             if (this.isLoggedIn) this.verifyToken();
         },
         methods: {
-            // ================= 新增：解析译文备注与交互逻辑 =================
+            // ================= 修复：解析译文备注与交互逻辑 =================
             parseTranslation(fullText) {
                 if (!fullText) return { text: '', remark: '' };
                 
-                // 匹配任意类型括号包裹的内容
-                const remarkMatches = fullText.match(/[(（\[【].*?[)）\]】]/g);
+                // 核心修复：匹配必须包含中文字符的括号
+                const regex = /[(（\[【][^)）\]】]*[\u4e00-\u9fa5][^)）\]】]*[)）\]】]/g;
+                const remarkMatches = fullText.match(regex);
+                
                 if (remarkMatches) {
                     // 去除两端括号，仅保留内部干净的文本
                     const cleanRemarks = remarkMatches.map(m => m.substring(1, m.length - 1).trim());
                     const remark = cleanRemarks.join(' ； ');
                     
                     // 将纯英文部分的文本抽离
-                    const text = fullText.replace(/[(（\[【].*?[)）\]】]/g, '').trim();
+                    const text = fullText.replace(regex, '').trim();
                     return { text, remark };
                 }
                 return { text: fullText, remark: '' };
             },
+            // =============================================================
             toggleRemark(en) {
                 const idx = this.expandedRemarks.indexOf(en);
                 if (idx > -1) {
