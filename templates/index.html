@@ -106,7 +106,7 @@
             padding: 3px 12px;
             border-radius: 6px;
             margin-left: 12px;
-            border-left: 3px;
+            border-left: 3px solid #B83A2D;
             opacity: 0;
             transition: all 0.3s ease;
             transform: translateX(-10px);
@@ -236,14 +236,14 @@
                         <div style="margin-top: 12px;">
                             <div v-for="en in item.translations" :key="en" class="translation-row">
                                 <div class="trans-text-container">
-                                    <span class="translation-tag">{{ parseTranslation(en).text }}</span>
-                                    <!-- 仅当存在备注时，渲染橘色小圆点 -->
-                                    <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
-                                    <!-- 悬停时浮现的备注信息（绑定 title 属性以应对超长文本原生提示） -->
-                                    <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
-                                        {{ parseTranslation(en).remark }}
-                                    </span>
-                                </div>
+                                <span class="translation-tag">{{ parseTranslation(en).text }}</span>
+                                <!-- 仅当存在备注时，渲染橘色小圆点 -->
+                                <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
+                                <!-- 悬停时浮现的备注信息（绑定 title 属性以应对超长文本原生提示） -->
+                                <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
+                                    {{ parseTranslation(en).remark }}
+                                </span>
+                            </div>
                                 <div class="action-btns">
                                     <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
                                     <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
@@ -307,22 +307,14 @@
                         <template #header><div style="display: flex; justify-content: space-between;"><span class="zh-title">{{ item.zh_text }}</span><el-tag :type="getCategoryType(item.category)">{{ item.category }}</el-tag></div></template>
                         <div style="margin-bottom: 10px;">
                             <div v-for="en in item.translations" :key="en" class="translation-row">
-                                <div style="flex: 1; display: flex; flex-direction: column;">
-                                    <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 10px;">
-                                        <span class="translation-tag">{{ parseTranslation(en).text }}</span>
-                                        <el-tag v-if="parseTranslation(en).remark" 
-                                                size="small" 
-                                                type="info" 
-                                                style="cursor: pointer;"
-                                                @click="toggleRemark(en)">
-                                            <el-icon><InfoFilled /></el-icon> 备注信息
-                                        </el-tag>
-                                    </div>
-                                    <el-collapse-transition>
-                                        <div v-show="isRemarkExpanded(en)" style="margin-top: 8px; font-size: 13px; color: var(--el-color-info); background: #EAE6DF; padding: 6px 12px; border-radius: 6px; border-left: 3px solid var(--el-color-warning); width: fit-content;">
-                                            {{ parseTranslation(en).remark }}
-                                        </div>
-                                    </el-collapse-transition>
+                                <div class="trans-text-container">
+                                    <span class="translation-tag">{{ parseTranslation(en).text }}</span>
+                                    <!-- 仅当存在备注时，渲染橘色小圆点 -->
+                                    <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
+                                    <!-- 悬停时浮现的备注信息（绑定 title 属性以应对超长文本原生提示） -->
+                                    <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
+                                        {{ parseTranslation(en).remark }}
+                                    </span>
                                 </div>
                                 <div class="action-btns">
                                     <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
