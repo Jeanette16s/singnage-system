@@ -99,14 +99,15 @@ def extract_en_suggestions_list(text: str) -> list:
     """
     智能提取英文译文，升级为列表返回：
     1. 遇到“或”或者“or”将其一分为多条独立记录
-    2. 保留括号内的内容（作为备注），清理游离的中文讨论内容
+    2. 仅保留包含中文的括号内容（作为备注），纯英文括号视为译文一部分
+    3. 清理游离的中文讨论内容
     """
     if not text: return []
     text = str(text).replace("：", ":")
     if "英文:" in text: 
         text = text.split("英文:")[1].strip()
 
-    # 以“或”或“or”为界进行切割（忽略大小写，利用 \b 确保 or 是完整单词）
+    # 以“或”或“or”为界进行切割（忽略大小写）
     parts = re.split(r'\s*或\s*|\s+\bor\b\s+', text, flags=re.IGNORECASE)
     
     results = []
@@ -114,8 +115,8 @@ def extract_en_suggestions_list(text: str) -> list:
         part = part.strip()
         if not part: continue
         
-        # 1. 提取当前片段中的括号内容
-        brackets = re.findall(r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', part)
+        # 1. 核心修复：仅提取包含中文字符的括号内容作为备注
+        brackets = re.findall(r'\([^)]*[\u4e00-\u9fa5][^)]*\)|（[^）]*[\u4e00-\u9fa5][^）]*）|\[[^\]]*[\u4e00-\u9fa5][^\]]*\]|【[^】]*[\u4e00-\u9fa5][^】]*】', part)
         
         # 2. 占位保护
         masked_text = part
