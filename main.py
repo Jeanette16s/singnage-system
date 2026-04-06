@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, status
+from fastapi import Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -212,12 +213,32 @@ def delete_user(user_id: int = Form(...), db: Session = Depends(get_db), current
 # ================= 核心业务路由 =================
 
 @app.get("/")
-async def read_root():
-    base_path = get_resource_path("index.html")
-    template_path = get_resource_path(os.path.join("templates", "index.html"))
-    if os.path.exists(base_path): return FileResponse(base_path)
-    elif os.path.exists(template_path): return FileResponse(template_path)
-    else: raise HTTPException(status_code=404, detail="未找到 index.html")
+async def read_root(request: Request):
+    """
+    智能路由分发：根据访问设备自动返回对应的 PC 端或移动端页面
+    """
+    # 1. 获取 User-Agent 请求头并转换为小写
+    user_agent = request.headers.get("user-agent", "").lower()
+    
+    # 2. 判断是否为移动设备
+    is_mobile = any(keyword in user_agent for keyword in ["mobile", "android", "iphone", "ipad"])
+    
+    # 3. 确定目标文件名
+    target_file = "mobile_index.html" if is_mobile else "index.html"
+    
+    # 4. 构建文件路径寻找逻辑
+    base_path = get_resource_path(target_file)
+    template_path = get_resource_path(os.path.join("templates", target_file))
+    
+    # 5. 返回对应的文件流
+    if os.path.exists(base_path): 
+        return FileResponse(base_path)
+    elif os.path.exists(template_path): 
+        return FileResponse(template_path)
+    else: 
+        raise HTTPException(status_code=404, detail=f"未找到 {target_file}，请检查文件目录是否正确。")
+
+# ... [保留原有的其他 API 路由配置，如 /api/search, /api/login 等] ...
 
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
