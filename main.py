@@ -65,6 +65,14 @@ try:
 except Exception:
     pass
 
+try:
+    with engine.connect() as conn:
+        # 修改：新增列时默认值为空字符串，不再显示"未标定"
+        conn.execute(text("ALTER TABLE signs ADD COLUMN source_tag VARCHAR DEFAULT ''"))
+        conn.commit()
+except Exception:
+    pass
+
 app = FastAPI(title="公示语多语言词库系统")
 
 @app.on_event("startup")
@@ -96,18 +104,11 @@ def extract_zh_sign(text: str) -> str:
     return text.strip()
 
 def extract_en_suggestions_list(text: str) -> list:
-    """
-    智能提取英文译文，升级为列表返回：
-    1. 遇到“或”或者“or”将其一分为多条独立记录
-    2. 仅保留包含中文的括号内容（作为备注），纯英文括号视为译文一部分
-    3. 清理游离的中文讨论内容
-    """
     if not text: return []
     text = str(text).replace("：", ":")
     if "英文:" in text: 
         text = text.split("英文:")[1].strip()
 
-    # 以“或”或“or”为界进行切割（忽略大小写）
     parts = re.split(r'\s*或\s*|\s+\bor\b\s+', text, flags=re.IGNORECASE)
     
     results = []
@@ -115,22 +116,17 @@ def extract_en_suggestions_list(text: str) -> list:
         part = part.strip()
         if not part: continue
         
-        # 1. 核心修复：仅提取包含中文字符的括号内容作为备注
         brackets = re.findall(r'\([^)]*[\u4e00-\u9fa5][^)]*\)|（[^）]*[\u4e00-\u9fa5][^）]*）|\[[^\]]*[\u4e00-\u9fa5][^\]]*\]|【[^】]*[\u4e00-\u9fa5][^】]*】', part)
         
-        # 2. 占位保护
         masked_text = part
         for i, b in enumerate(brackets):
             masked_text = masked_text.replace(b, f" __BRK_{i}__ ")
             
-        # 3. 大扫除：清理非括号内的中文及中文标点
         masked_text = re.sub(r'[\u4e00-\u9fa5。，、；：“”‘’！？]+', ' ', masked_text)
         
-        # 4. 还原占位符
         for i, b in enumerate(brackets):
             masked_text = masked_text.replace(f" __BRK_{i}__ ", b).replace(f"__BRK_{i}__", b)
             
-        # 5. 去除多余空格和多余头尾标点
         cleaned = re.sub(r'\s+', ' ', masked_text).strip()
         cleaned = re.sub(r'^[,.!?;:]+|[,.!?;:]+$', '', cleaned).strip()
         
@@ -243,7 +239,7 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
             if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
             zh = sign.zh_term
             if zh not in grouped: 
-                grouped[zh] = {"zh_text": zh, "category": sign.category, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": 100.0}
+                grouped[zh] = {"zh_text": zh, "category": sign.category, "source_tag": sign.source_tag, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": 100.0}
             grouped[zh]["translations"].add(sign.en_translation)
     else:
         for sign in all_signs:
@@ -258,7 +254,8 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
                     score = max(score, 70.0 + 29.0 * len_ratio)
             if score >= 40.0:
                 zh = sign.zh_term
-                if zh not in grouped: grouped[zh] = {"zh_text": zh, "category": sign.category, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
+                if zh not in grouped: 
+                    grouped[zh] = {"zh_text": zh, "category": sign.category, "source_tag": sign.source_tag, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
                 grouped[zh]["translations"].add(sign.en_translation)
                 if score > grouped[zh]["match_score"]: grouped[zh]["match_score"] = score
 
@@ -332,13 +329,11 @@ def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db
     db.commit()
     return {"status": "success", "msg": "词条已成功删除！"}
 
-
 @app.post("/api/add_single")
 def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     clean_zh = zh_text.replace('\r\n', '\n').replace('\r', '')
     raw_en = en_text.replace('\r\n', '\n').replace('\r', '')
     
-    # 支持单条录入时自动裂变
     en_list = extract_en_suggestions_list(raw_en)
     if not en_list:
         en_list = [raw_en]
@@ -360,13 +355,17 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
     return {"status": "success", "msg": f"录入成功，受影响条数：{added_count}"}
 
 @app.post("/api/upload_excel")
-async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+async def upload_excel(
+    file: UploadFile = File(...), 
+    source_tag: str = Form(""), # 修改：默认空字符串
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(require_editor)
+):
     contents = await file.read()
     try:
         df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
         if '公示语中文' not in df.columns or '英文译文' not in df.columns: return {"status": "error", "msg": "Excel必须包含 '公示语中文' 和 '英文译文' 两列！"}
         
-        # 将带有“或”的整行数据进行裂变处理
         expanded_rows = []
         for _, row in df.iterrows():
             en_val = str(row.get('英文译文', ''))
@@ -391,7 +390,14 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
-                db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
+                db.add(Signage(
+                    zh_term=item['zh_text'], 
+                    en_translation=item['en_text'], 
+                    sequence_id=seq_id, 
+                    sequence_order=seq_order, 
+                    category=item['category'],
+                    source_tag=source_tag
+                ))
                 db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
             else: skip_count += 1
@@ -400,7 +406,12 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e: return {"status": "error", "msg": str(e)}
 
 @app.post("/api/upload_docx")
-async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+async def upload_docx(
+    file: UploadFile = File(...), 
+    source_tag: str = Form(""), # 修改：默认空字符串
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(require_editor)
+):
     if file.filename.endswith('.doc'): return {"status": "error", "msg": "请先在本地另存为 .docx 格式后重试！"}
     elif not file.filename.endswith('.docx'): return {"status": "error", "msg": "请上传 .docx 文档！"}
     contents = await file.read()
@@ -420,7 +431,6 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
             if not raw_sign and not raw_suggestion: continue
             
             clean_zh = extract_zh_sign(raw_sign)
-            # 使用新的数组提取方案
             clean_en_list = extract_en_suggestions_list(raw_suggestion)
             if clean_zh and clean_en_list: 
                 for clean_en in clean_en_list:
@@ -435,7 +445,14 @@ async def upload_docx(file: UploadFile = File(...), db: Session = Depends(get_db
             if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
-                db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
+                db.add(Signage(
+                    zh_term=item['zh_text'], 
+                    en_translation=item['en_text'], 
+                    sequence_id=seq_id, 
+                    sequence_order=seq_order, 
+                    category=item['category'],
+                    source_tag=source_tag
+                ))
                 db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
             else: skip_count += 1
@@ -471,7 +488,7 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     grouped = {}
     for item in matched:
-        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "source_tag": item.source_tag, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
         grouped[item.zh_term]["translations"].add(item.en_translation)
     all_associated_items = {item.id: item for item in associated}.values()
     for zh, data in grouped.items():
@@ -510,7 +527,7 @@ async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     grouped = {}
     for item in matched:
-        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "source_tag": item.source_tag, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
         grouped[item.zh_term]["translations"].add(item.en_translation)
     all_associated_items = {item.id: item for item in associated}.values()
     for zh, data in grouped.items():
@@ -575,7 +592,6 @@ def delete_history(id: int = Form(...), db: Session = Depends(get_db), current_u
     db.commit()
     return {"status": "success", "msg": "已永久删除。"}
 
-
 @app.post("/api/history/batch_delete")
 def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
     try:
@@ -598,6 +614,31 @@ def batch_delete_history(id_list: str = Form(...), db: Session = Depends(get_db)
     except Exception as e:
         db.rollback()
         return {"status": "error", "msg": f"批量删除失败: {str(e)}"}
+
+@app.post("/api/history/batch_tag")
+def batch_tag_history(id_list: str = Form(...), tag_value: str = Form(...), db: Session = Depends(get_db), current_user: User = Depends(require_editor)):
+    try:
+        ids = json.loads(id_list)
+        if not ids: return {"status": "error", "msg": "未选中任何记录"}
+        
+        records = db.query(ActionHistory).filter(ActionHistory.id.in_(ids)).all()
+        count = 0
+        
+        for r in records:
+            if current_user.role != 'admin' and r.username != current_user.username:
+                continue
+            
+            sign_records = db.query(Signage).filter(Signage.zh_term == r.zh_term, Signage.en_translation == r.en_translation).all()
+            
+            for s in sign_records: 
+                s.source_tag = tag_value  
+                count += 1
+                
+        db.commit()
+        return {"status": "success", "msg": f"成功操作了 {count} 个词条！"}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "msg": f"操作失败: {str(e)}"}
 
 @app.get("/api/export_history")
 def export_history(category: str = "", username: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
