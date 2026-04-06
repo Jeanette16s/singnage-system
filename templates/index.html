@@ -148,7 +148,7 @@
             </span>
             <template #dropdown>
                 <el-dropdown-menu>
-                    <el-dropdown-item command="profile" icon="UserFilled">个人数据中心</el-dropdown-item>
+                    <el-dropdown-item command="password" icon="Lock">修改密码</el-dropdown-item>
                     <el-dropdown-item command="logout" icon="SwitchButton" divided>退出系统</el-dropdown-item>
                 </el-dropdown-menu>
             </template>
@@ -346,11 +346,84 @@
                 </el-card>
             </el-tab-pane>
 
+            <!-- 新增：个人数据 Tab页 -->
+            <el-tab-pane v-if="hasEditPermission">
+                <template #label>
+                    <span class="custom-tabs-label">
+                        <el-icon><Notebook/></el-icon>
+                        <span>个人数据</span>
+                    </span>
+                </template>
+                <el-card shadow="never" style="height: calc(100vh - 80px); display: flex; flex-direction: column;">
+                    <template #header>
+                        <h3 style="margin:0; display: flex; align-items: center;"><el-icon style="margin-right: 8px;"><FolderOpened /></el-icon>我的上传记录</h3>
+                    </template>
+                    
+                    <div style="margin-bottom: 20px; display: flex; gap: 12px; align-items: center;">
+                        <el-dropdown @command="handleSourceFilter">
+                            <el-button type="primary" plain>
+                                <el-icon style="margin-right: 5px;"><Filter /></el-icon> 
+                                来源: {{ myUploadsFilter || '全部' }} <el-icon class="el-icon--right"><arrow-down /></el-icon>
+                            </el-button>
+                            <template #dropdown>
+                                <el-dropdown-menu>
+                                    <el-dropdown-item command="">全部来源</el-dropdown-item>
+                                    <el-dropdown-item command="Word导入" divided>Word 文件</el-dropdown-item>
+                                    <el-dropdown-item command="Excel导入">Excel 表格</el-dropdown-item>
+                                    <el-dropdown-item command="单条录入">手动录入</el-dropdown-item>
+                                </el-dropdown-menu>
+                            </template>
+                        </el-dropdown>
+
+                        <el-select v-model="selectedHourSlot" placeholder="点击筛选时段" style="width: 160px" clearable>
+                            <el-option v-for="slot in availableTimeSlots" :key="slot" :label="slot" :value="slot"></el-option>
+                        </el-select>
+
+                        <div style="flex: 1"></div>
+                        
+                        <div style="display: flex; gap: 10px;">
+                            <el-dropdown :disabled="selectedUploads.length === 0" @command="batchTagUploads">
+                                <el-button type="success" :disabled="selectedUploads.length === 0">
+                                    <el-icon style="margin-right: 5px;"><Discount /></el-icon>批量打标 ({{ selectedUploads.length }})<el-icon class="el-icon--right"><arrow-down /></el-icon>
+                                </el-button>
+                                <template #dropdown>
+                                    <el-dropdown-menu>
+                                        <el-dropdown-item command="官方规范">标为：官方规范</el-dropdown-item>
+                                        <el-dropdown-item command="" divided>清除标签</el-dropdown-item>
+                                    </el-dropdown-menu>
+                                </template>
+                            </el-dropdown>
+
+                            <el-button type="danger" :disabled="selectedUploads.length === 0" @click="batchDeleteUploads">
+                                <el-icon style="margin-right: 5px;"><Delete /></el-icon>批量删除 ({{ selectedUploads.length }})
+                            </el-button>
+                        </div>
+                    </div>
+
+                    <el-table :data="filteredMyUploads" style="width: 100%; flex: 1;" height="100%" @selection-change="handleSelectionChange" v-loading="myUploadsLoading" stripe>
+                        <el-table-column type="selection" width="55"></el-table-column>
+                        <el-table-column prop="created_at" label="上传时间" width="160"><template #default="scope">{{ formatDate(scope.row.created_at) }}</template></el-table-column>
+                        <el-table-column prop="action_type" label="来源" width="110">
+                            <template #default="scope"><el-tag size="small" type="info">{{ scope.row.action_type }}</el-tag></template>
+                        </el-table-column>
+                        <el-table-column prop="zh_term" label="中文标语" min-width="160"></el-table-column>
+                        <el-table-column prop="en_translation" label="英文翻译" min-width="160"></el-table-column>
+                        <el-table-column prop="category" label="分类" width="90"></el-table-column>
+                        <el-table-column label="操作" width="80" align="center" fixed="right">
+                            <template #default="scope">
+                                <el-button size="small" type="primary" link @click="openHistoryEditDialog(scope.row)">修改</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </el-card>
+            </el-tab-pane>
+
+            <!-- 更名：历史记录 -->
             <el-tab-pane v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><List /></el-icon>
-                        <span>全局审计</span>
+                        <span>历史记录</span>
                     </span>
                 </template>
                 <el-card shadow="never" style="height: calc(100vh - 80px); display: flex; flex-direction: column;">
@@ -409,86 +482,20 @@
             </el-tab-pane>
         </el-tabs>
 
-        <el-drawer v-model="profileDrawerVisible" title="个人数据中心" size="65%">
-            <el-tabs v-model="profileActiveTab">
-                
-                <el-tab-pane name="uploads">
-                    <template #label><el-icon style="margin-right: 5px;"><FolderOpened /></el-icon>我的上传记录</template>
-                    
-                    <div style="margin-bottom: 20px; display: flex; gap: 12px; align-items: center;">
-                        <el-dropdown @command="handleSourceFilter">
-                            <el-button type="primary" plain>
-                                <el-icon style="margin-right: 5px;"><Filter /></el-icon> 
-                                来源: {{ myUploadsFilter || '全部' }} <el-icon class="el-icon--right"><arrow-down /></el-icon>
-                            </el-button>
-                            <template #dropdown>
-                                <el-dropdown-menu>
-                                    <el-dropdown-item command="">全部来源</el-dropdown-item>
-                                    <el-dropdown-item command="Word导入" divided>Word 文件</el-dropdown-item>
-                                    <el-dropdown-item command="Excel导入">Excel 表格</el-dropdown-item>
-                                    <el-dropdown-item command="单条录入">手动录入</el-dropdown-item>
-                                </el-dropdown-menu>
-                            </template>
-                        </el-dropdown>
-
-                        <el-select v-model="selectedHourSlot" placeholder="点击筛选时段" style="width: 160px" clearable>
-                            <el-option v-for="slot in availableTimeSlots" :key="slot" :label="slot" :value="slot"></el-option>
-                        </el-select>
-
-                        <div style="flex: 1"></div>
-                        
-                        <div style="display: flex; gap: 10px;">
-                            <el-dropdown :disabled="selectedUploads.length === 0" @command="batchTagUploads">
-                                <el-button type="success" :disabled="selectedUploads.length === 0">
-                                    <el-icon style="margin-right: 5px;"><Discount /></el-icon>批量打标 ({{ selectedUploads.length }})<el-icon class="el-icon--right"><arrow-down /></el-icon>
-                                </el-button>
-                                <template #dropdown>
-                                    <el-dropdown-menu>
-                                        <el-dropdown-item command="官方规范">标为：官方规范</el-dropdown-item>
-                                        <el-dropdown-item command="" divided>清除标签</el-dropdown-item>
-                                    </el-dropdown-menu>
-                                </template>
-                            </el-dropdown>
-
-                            <el-button type="danger" :disabled="selectedUploads.length === 0" @click="batchDeleteUploads">
-                                <el-icon style="margin-right: 5px;"><Delete /></el-icon>批量删除 ({{ selectedUploads.length }})
-                            </el-button>
-                        </div>
-                    </div>
-
-                    <el-table :data="filteredMyUploads" style="width: 100%" height="calc(100vh - 200px)" @selection-change="handleSelectionChange" v-loading="myUploadsLoading">
-                        <el-table-column type="selection" width="55"></el-table-column>
-                        <el-table-column prop="created_at" label="上传时间" width="160"><template #default="scope">{{ formatDate(scope.row.created_at) }}</template></el-table-column>
-                        <el-table-column prop="action_type" label="来源" width="110">
-                            <template #default="scope"><el-tag size="small" type="info">{{ scope.row.action_type }}</el-tag></template>
-                        </el-table-column>
-                        <el-table-column prop="zh_term" label="中文标语" min-width="160"></el-table-column>
-                        <el-table-column prop="en_translation" label="英文翻译" min-width="160"></el-table-column>
-                        <el-table-column prop="category" label="分类" width="90"></el-table-column>
-                        <el-table-column label="操作" width="80" align="center" fixed="right">
-                            <template #default="scope">
-                                <el-button size="small" type="primary" link @click="openHistoryEditDialog(scope.row)">修改</el-button>
-                            </template>
-                        </el-table-column>
-                    </el-table>
-                </el-tab-pane>
-
-                <el-tab-pane name="security">
-                    <template #label><el-icon style="margin-right: 5px;"><Lock /></el-icon>修改个人信息</template>
-                    <div style="padding: 20px; max-width: 400px;">
-                        <h4 style="margin-top:0;">修改登录密码</h4>
-                        <el-form :model="pwdForm" label-position="top">
-                            <el-form-item label="当前密码"><el-input type="password" v-model="pwdForm.old_password" show-password></el-input></el-form-item>
-                            <el-form-item label="新密码"><el-input type="password" v-model="pwdForm.new_password" show-password></el-input></el-form-item>
-                            <el-form-item label="确认新密码"><el-input type="password" v-model="pwdForm.confirm_password" show-password></el-input></el-form-item>
-                            <el-button type="primary" @click="submitPasswordChange" :loading="isUpdatingPwd">确认修改密码</el-button>
-                        </el-form>
-                    </div>
-                </el-tab-pane>
-
-            </el-tabs>
-        </el-drawer>
     </template>
+
+    <!-- 新增：独立的修改密码弹窗 -->
+    <el-dialog title="修改登录密码" v-model="pwdDialogVisible" width="400px">
+        <el-form :model="pwdForm" label-position="top">
+            <el-form-item label="当前密码"><el-input type="password" v-model="pwdForm.old_password" show-password></el-input></el-form-item>
+            <el-form-item label="新密码"><el-input type="password" v-model="pwdForm.new_password" show-password></el-input></el-form-item>
+            <el-form-item label="确认新密码"><el-input type="password" v-model="pwdForm.confirm_password" show-password></el-input></el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button @click="pwdDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="submitPasswordChange" :loading="isUpdatingPwd">确认修改</el-button>
+        </template>
+    </el-dialog>
 
     <el-dialog title="上传预设" v-model="uploadConfigVisible" width="400px" :close-on-click-modal="false">
         <div style="text-align: center; margin-bottom: 20px;">
@@ -508,7 +515,7 @@
     <el-dialog title="编辑词库条目" v-model="searchEditDialogVisible" width="550px">
         <el-form :model="searchEditForm" label-position="top">
             <el-form-item label="中文标语"><el-input v-model="searchEditForm.new_zh" type="textarea" :rows="2"></el-input></el-form-item>
-            <el-form-item label="英文译文"><el-input v-model="searchEditForm.new_en" type="textarea" :rows="2"></el-input></el-form-item>
+            <el-form-item label="英文译文（含备注）"><el-input v-model="searchEditForm.new_en" type="textarea" :rows="2"></el-input></el-form-item>
             <el-form-item label="词条分类">
                 <el-select v-model="searchEditForm.category" style="width: 100%;">
                     <el-option label="提示类" value="提示类"></el-option><el-option label="强制类" value="强制类"></el-option>
@@ -523,7 +530,7 @@
     <el-dialog title="修改历史上传记录" v-model="historyEditDialogVisible" width="550px">
         <el-form :model="historyEditForm" label-position="top">
             <el-form-item label="中文标语"><el-input v-model="historyEditForm.zh_term" type="textarea" :rows="2"></el-input></el-form-item>
-            <el-form-item label="英文译文"><el-input v-model="historyEditForm.en_translation" type="textarea" :rows="2"></el-input></el-form-item>
+            <el-form-item label="英文译文（含备注）"><el-input v-model="historyEditForm.en_translation" type="textarea" :rows="2"></el-input></el-form-item>
             <el-form-item label="词条分类">
                 <el-select v-model="historyEditForm.category" style="width: 100%;">
                     <el-option label="提示类" value="提示类"></el-option><el-option label="强制类" value="强制类"></el-option>
@@ -575,9 +582,10 @@
                 
                 adminHistoryData: [], adminHistoryFilterCategory: '',
                 
-                profileDrawerVisible: false, profileActiveTab: 'uploads',
                 myUploadsData: [], myUploadsFilter: '', myUploadsLoading: false, selectedUploads: [],
                 selectedHourSlot: '',
+                
+                pwdDialogVisible: false, // 替换了抽屉，改用小弹窗
                 pwdForm: { old_password: '', new_password: '', confirm_password: '' }, isUpdatingPwd: false,
                 
                 searchEditDialogVisible: false, isEditingSearch: false, searchEditForm: { old_zh: '', old_en: '', new_zh: '', new_en: '', category: '' },
@@ -648,6 +656,7 @@
                         if (this.hasEditPermission) {
                             this.fetchRecentAdditions();
                             this.fetchAdminHistory();
+                            this.fetchMyUploads(); // 加载页面时直接获取个人数据，确保Tab页内容就绪
                         }
                         if (this.userRole === 'admin') { this.fetchUsers(); }
                     }
@@ -665,6 +674,7 @@
                     if (this.hasEditPermission) {
                         this.fetchRecentAdditions();
                         this.fetchAdminHistory();
+                        this.fetchMyUploads(); // 登录后顺便加载个人数据
                     }
                     if (this.userRole === 'admin') { this.fetchUsers(); }
                 }).finally(() => { this.isLoggingIn = false; });
@@ -696,10 +706,13 @@
                 }).finally(() => { this.isRegistering = false; });
             },
             handleLogout() { localStorage.clear(); this.isLoggedIn = false; window.location.reload(); },
+            
+            // 更新后的头像菜单处理逻辑
             handleAvatarCommand(command) {
                 if (command === 'logout') { this.handleLogout(); }
-                else if (command === 'profile') { this.profileDrawerVisible = true; this.fetchMyUploads(); }
+                else if (command === 'password') { this.pwdDialogVisible = true; } // 唤起修改密码弹窗
             },
+            
             handleSourceFilter(command) {
                 this.myUploadsFilter = command;
             },
@@ -752,7 +765,7 @@
                     if (res.data.status === 'success') {
                         ElementPlus.ElMessage.success(res.data.msg);
                         this.pwdForm = { old_password: '', new_password: '', confirm_password: '' };
-                        this.profileDrawerVisible = false;
+                        this.pwdDialogVisible = false; // 关闭弹窗
                     } else ElementPlus.ElMessage.error(res.data.msg);
                 }).finally(() => { this.isUpdatingPwd = false; });
             },
@@ -853,7 +866,10 @@
                         });
                         this.fetchRecentAdditions(); 
                         this.fetchStats(); 
-                        if(this.hasEditPermission) this.fetchAdminHistory(); 
+                        if(this.hasEditPermission) {
+                            this.fetchAdminHistory();
+                            this.fetchMyUploads();
+                        }
                         options.onSuccess(res.data); 
                     } else { 
                         ElementPlus.ElMessage.error(res.data.msg); 
@@ -874,7 +890,7 @@
                     ElementPlus.ElMessage.success(res.data.msg); 
                     this.historyEditDialogVisible = false; 
                     if(this.hasEditPermission) this.fetchAdminHistory(); 
-                    if(this.profileDrawerVisible) this.fetchMyUploads();
+                    this.fetchMyUploads();
                     this.handleSearch(true);
                 } }).finally(() => { this.isEditingHistory = false; });
             },
@@ -886,7 +902,7 @@
                             ElementPlus.ElMessage.success('已清退数据'); 
                             this.fetchStats(); 
                             if(isAdminTab) this.fetchAdminHistory(); 
-                            if(this.profileDrawerVisible) this.fetchMyUploads();
+                            this.fetchMyUploads();
                             this.handleSearch(true);
                         } 
                     });
