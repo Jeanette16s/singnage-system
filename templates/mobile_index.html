@@ -15,7 +15,6 @@
             --el-color-primary: #35564C; 
             --el-color-danger: #B83A2D; 
             --brand-orange: #F2A950;
-            --el-color-success: #5C807B; 
             --el-text-color-primary: #1A201C; 
             --el-text-color-regular: #4A5550;
             --el-border-color-light: #EAE6DF;
@@ -49,12 +48,12 @@
         .result-item { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.02); border: 1px solid var(--el-border-color-light); cursor: pointer; }
         .result-item-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
         .result-zh { font-size: 18px; font-weight: bold; color: #111; line-height: 1.4; }
-        .result-en { font-size: 15px; color: var(--el-color-primary); font-weight: 500; line-height: 1.5; margin-bottom: 4px;}
         
-        /* 新版手机端翻译块 */
+        /* 手机端译文布局升级 */
         .mobile-trans-block { padding: 12px 0; border-bottom: 1px dashed var(--el-border-color-light); }
         .mobile-trans-block:last-child { border-bottom: none; }
-        .source-label-mobile { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--el-color-success); background: #EAF0EF; padding: 2px 6px; border-radius: 4px; margin-top: 6px; font-weight: bold;}
+        .result-en { font-size: 15px; color: var(--el-color-primary); font-weight: 500; line-height: 1.5; margin-bottom: 4px;}
+        .source-label-mobile { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #757E7A; margin-top: 6px;}
 
         .action-panel { background-color: #F8F7F4; border-radius: 8px; padding: 10px; margin-top: 15px; border: 1px solid var(--el-border-color-light); }
         .action-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; font-weight: bold; border: none; background: transparent; padding: 5px 10px; }
@@ -116,29 +115,25 @@
                     
                     <div class="mobile-trans-block" v-for="(enObj, i) in item.translations" :key="i">
                         <div class="result-en">{{ parseTranslation(enObj.text).text }}</div>
-                        <div class="remark-tag" v-if="parseTranslation(enObj.text).remark">
-                            <el-icon><WarningFilled /></el-icon> 备注: {{ parseTranslation(enObj.text).remark }}
-                        </div>
+                        <div class="remark-tag" v-if="parseTranslation(enObj.text).remark"><el-icon><WarningFilled /></el-icon> 备注: {{ parseTranslation(enObj.text).remark }}</div>
                         
                         <div v-if="enObj.source_tag && enObj.source_tag.includes('官方规范')" class="source-label-mobile">
-                            <el-icon><SuccessFilled /></el-icon> 官方规范
+                            <el-icon><CollectionTag /></el-icon> 来源：《深圳市公共服务领域英文译写规范》
                         </div>
                     </div>
 
                     <el-collapse-transition>
                         <div v-show="item.showActions" class="action-panel" @click.stop>
                             <div style="width: 100%; margin-bottom: 15px;" v-for="(enObj, idx) in item.translations" :key="'act-'+idx">
-                                <div style="font-size:11px; color:#bbb; margin-bottom: 10px; text-align:center;">
-                                    —— 译文 {{ idx + 1 }} 操作区 ——
-                                </div>
+                                <div style="font-size:11px; color:#bbb; margin-bottom: 10px; text-align:center;">译文 {{ idx + 1 }} 操作选项</div>
                                 <div style="display: flex; justify-content: space-around;">
                                     
                                     <button class="action-btn" style="color: var(--el-color-info);" @click="showMobileSource(enObj.source_tag)">
-                                        <el-icon><CollectionTag /></el-icon>来源
+                                        <el-icon><Document /></el-icon>来源
                                     </button>
-                                    
+
                                     <button class="action-btn copy" @click="copyText(parseTranslation(enObj.text).text)">
-                                        <el-icon><CopyDocument /></el-icon>复制
+                                        <el-icon><More /></el-icon>复制
                                     </button>
                                     
                                     <template v-if="hasEditPermission">
@@ -180,28 +175,16 @@
                         
                         <div class="mobile-trans-block" v-for="(enObj, i) in item.translations" :key="i">
                             <div class="result-en">{{ parseTranslation(enObj.text).text }}</div>
-                            <div class="remark-tag" v-if="parseTranslation(enObj.text).remark">
-                                <el-icon><WarningFilled /></el-icon> 备注: {{ parseTranslation(enObj.text).remark }}
-                            </div>
                             <div v-if="enObj.source_tag && enObj.source_tag.includes('官方规范')" class="source-label-mobile">
-                                <el-icon><SuccessFilled /></el-icon> 官方规范
+                                <el-icon><CollectionTag /></el-icon> 来源：《深圳市公共服务领域英文译写规范》
                             </div>
                         </div>
 
                         <el-collapse-transition>
                             <div v-show="item.showActions" class="action-panel" @click.stop>
-                                <div style="width: 100%; margin-bottom: 15px;" v-for="(enObj, idx) in item.translations" :key="'match-act-'+idx">
-                                    <div style="font-size:11px; color:#bbb; margin-bottom: 10px; text-align:center;">
-                                        —— 译文 {{ idx + 1 }} 操作区 ——
-                                    </div>
-                                    <div style="display: flex; justify-content: space-around;">
-                                        <button class="action-btn" style="color: var(--el-color-info);" @click="showMobileSource(enObj.source_tag)">
-                                            <el-icon><CollectionTag /></el-icon>来源
-                                        </button>
-                                        <button class="action-btn copy" @click="copyText(parseTranslation(enObj.text).text)">
-                                            <el-icon><CopyDocument /></el-icon>复制
-                                        </button>
-                                    </div>
+                                <div style="width: 100%; display: flex; justify-content: space-around; margin-bottom: 10px;" v-for="(enObj, idx) in item.translations" :key="'match-act-'+idx">
+                                    <button class="action-btn" style="color: var(--el-color-info);" @click="showMobileSource(enObj.source_tag)"><el-icon><Document /></el-icon>来源</button>
+                                    <button class="action-btn copy" @click="copyText(parseTranslation(enObj.text).text)"><el-icon><More /></el-icon>>复制</button>
                                 </div>
                             </div>
                         </el-collapse-transition>
@@ -424,7 +407,7 @@
             },
             showMobileSource(tag) {
                 if (!tag || tag === '未标定') {
-                    ElementPlus.ElMessage.info('该词条暂无详细来源记录');
+                    ElementPlus.ElMessage.info('该词条暂无详细的文件来源记录');
                     return;
                 }
                 ElementPlus.ElMessageBox.alert(tag, '溯源信息', {
