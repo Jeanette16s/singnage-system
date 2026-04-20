@@ -1,5 +1,4 @@
-from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, status
-from fastapi import Request
+from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -68,7 +67,6 @@ except Exception:
 
 try:
     with engine.connect() as conn:
-        # 修改：新增列时默认值为空字符串，不再显示"未标定"
         conn.execute(text("ALTER TABLE signs ADD COLUMN source_tag VARCHAR DEFAULT ''"))
         conn.commit()
 except Exception:
@@ -136,7 +134,6 @@ def extract_en_suggestions_list(text: str) -> list:
             
     return results
 
-# ================= 高级排序规则 =================
 def advanced_sort_key(text):
     clean_text = str(text).strip()
     match = re.search(r'([\u4e00-\u9fa5a-zA-Z0-9])', clean_text)
@@ -156,6 +153,28 @@ def advanced_sort_key(text):
     sort_content = clean_text[match.start():]
     return (priority, get_sort_key(sort_content))
 
+def merge_source_tags(current_tag, new_tag):
+    if not new_tag or new_tag == "未标定" or str(new_tag).lower() == "nan":
+        return current_tag
+    if not current_tag or current_tag == "未标定" or str(current_tag).lower() == "nan":
+        return new_tag
+    if new_tag not in current_tag:
+        return f"{current_tag} | {new_tag}"
+    return current_tag
+
+# ================= 动态路由分发 =================
+@app.get("/")
+async def read_root(request: Request):
+    user_agent = request.headers.get("user-agent", "").lower()
+    is_mobile = any(keyword in user_agent for keyword in ["mobile", "android", "iphone", "ipad"])
+    target_file = "mobile_index.html" if is_mobile else "index.html"
+    
+    base_path = get_resource_path(target_file)
+    template_path = get_resource_path(os.path.join("templates", target_file))
+    
+    if os.path.exists(base_path): return FileResponse(base_path)
+    elif os.path.exists(template_path): return FileResponse(template_path)
+    else: raise HTTPException(status_code=404, detail=f"未找到 {target_file}")
 
 # ================= 认证与用户管理路由 =================
 @app.post("/api/login")
@@ -212,34 +231,6 @@ def delete_user(user_id: int = Form(...), db: Session = Depends(get_db), current
 
 # ================= 核心业务路由 =================
 
-@app.get("/")
-async def read_root(request: Request):
-    """
-    智能路由分发：根据访问设备自动返回对应的 PC 端或移动端页面
-    """
-    # 1. 获取 User-Agent 请求头并转换为小写
-    user_agent = request.headers.get("user-agent", "").lower()
-    
-    # 2. 判断是否为移动设备
-    is_mobile = any(keyword in user_agent for keyword in ["mobile", "android", "iphone", "ipad"])
-    
-    # 3. 确定目标文件名
-    target_file = "mobile_index.html" if is_mobile else "index.html"
-    
-    # 4. 构建文件路径寻找逻辑
-    base_path = get_resource_path(target_file)
-    template_path = get_resource_path(os.path.join("templates", target_file))
-    
-    # 5. 返回对应的文件流
-    if os.path.exists(base_path): 
-        return FileResponse(base_path)
-    elif os.path.exists(template_path): 
-        return FileResponse(template_path)
-    else: 
-        raise HTTPException(status_code=404, detail=f"未找到 {target_file}，请检查文件目录是否正确。")
-
-# ... [保留原有的其他 API 路由配置，如 /api/search, /api/login 等] ...
-
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     count = db.query(Signage.zh_term).filter(
@@ -260,8 +251,13 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
             if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
             zh = sign.zh_term
             if zh not in grouped: 
-                grouped[zh] = {"zh_text": zh, "category": sign.category, "source_tag": sign.source_tag, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": 100.0}
-            grouped[zh]["translations"].add(sign.en_translation)
+                # 修复点：新增 translations_map 字典，单独存放每个译文及其来源
+                grouped[zh] = {"zh_text": zh, "category": sign.category, "translations_map": {}, "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": 100.0}
+            
+            if sign.en_translation not in grouped[zh]["translations_map"]:
+                grouped[zh]["translations_map"][sign.en_translation] = sign.source_tag
+            else:
+                grouped[zh]["translations_map"][sign.en_translation] = merge_source_tags(grouped[zh]["translations_map"][sign.en_translation], sign.source_tag)
     else:
         for sign in all_signs:
             if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
@@ -276,17 +272,25 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
             if score >= 40.0:
                 zh = sign.zh_term
                 if zh not in grouped: 
-                    grouped[zh] = {"zh_text": zh, "category": sign.category, "source_tag": sign.source_tag, "translations": set(), "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
-                grouped[zh]["translations"].add(sign.en_translation)
+                    grouped[zh] = {"zh_text": zh, "category": sign.category, "translations_map": {}, "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
+                
                 if score > grouped[zh]["match_score"]: grouped[zh]["match_score"] = score
+                
+                if sign.en_translation not in grouped[zh]["translations_map"]:
+                    grouped[zh]["translations_map"][sign.en_translation] = sign.source_tag
+                else:
+                    grouped[zh]["translations_map"][sign.en_translation] = merge_source_tags(grouped[zh]["translations_map"][sign.en_translation], sign.source_tag)
 
     if not grouped: return {"data": []}
     
     seq_ids = [data["seq_id"] for data in grouped.values() if data["seq_id"]]
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     all_associated_items = {item.id: item for item in associated}.values()
+    
     for zh, data in grouped.items():
-        data["translations"] = list(data["translations"])
+        # 修复点：将 map 转化为包含对象的 list 传给前端
+        data["translations"] = [{"text": en, "source_tag": tag} for en, tag in data.pop("translations_map").items()]
+        
         if data["seq_id"]:
             bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
             bros.sort(key=lambda x: x.sequence_order or 0)
@@ -333,19 +337,10 @@ def delete_signage(zh_term: str = Form(...), en_translation: str = Form(...), db
     clean_zh = zh_term.replace('\r\n', '\n').replace('\r', '')
     clean_en = en_translation.replace('\r\n', '\n').replace('\r', '')
     
-    records = db.query(Signage).filter(
-        func.replace(Signage.zh_term, '\r', '') == clean_zh, 
-        func.replace(Signage.en_translation, '\r', '') == clean_en
-    ).all()
-    
-    if not records: 
-        return {"status": "error", "msg": "找不到该词条，可能包含不可见字符或已被删除"}
-    
+    records = db.query(Signage).filter(func.replace(Signage.zh_term, '\r', '') == clean_zh, func.replace(Signage.en_translation, '\r', '') == clean_en).all()
+    if not records: return {"status": "error", "msg": "找不到该词条，可能包含不可见字符或已被删除"}
     category = records[0].category if records[0].category else ""
-    
-    for r in records:
-        db.delete(r)
-        
+    for r in records: db.delete(r)
     db.add(ActionHistory(action_type="删除译文", zh_term=clean_zh, en_translation=clean_en, category=category, username=current_user.username))
     db.commit()
     return {"status": "success", "msg": "词条已成功删除！"}
@@ -356,8 +351,7 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
     raw_en = en_text.replace('\r\n', '\n').replace('\r', '')
     
     en_list = extract_en_suggestions_list(raw_en)
-    if not en_list:
-        en_list = [raw_en]
+    if not en_list: en_list = [raw_en]
         
     data_to_add = [{"公示语中文": clean_zh, "英文译文": en} for en in en_list]
     df = pd.DataFrame(data_to_add)
@@ -368,7 +362,7 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
         if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
             seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
             seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
-            db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category']))
+            db.add(Signage(zh_term=item['zh_text'], en_translation=item['en_text'], sequence_id=seq_id, sequence_order=seq_order, category=item['category'], source_tag="单条手动录入"))
             db.add(ActionHistory(action_type="单条录入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
             added_count += 1
             
@@ -378,7 +372,7 @@ def add_single(zh_text: str = Form(...), en_text: str = Form(...), db: Session =
 @app.post("/api/upload_excel")
 async def upload_excel(
     file: UploadFile = File(...), 
-    source_tag: str = Form(""), # 修改：默认空字符串
+    source_tag: str = Form(""), 
     db: Session = Depends(get_db), 
     current_user: User = Depends(require_editor)
 ):
@@ -387,16 +381,16 @@ async def upload_excel(
         df = pd.read_excel(io.BytesIO(contents), engine='openpyxl')
         if '公示语中文' not in df.columns or '英文译文' not in df.columns: return {"status": "error", "msg": "Excel必须包含 '公示语中文' 和 '英文译文' 两列！"}
         
+        final_source = f"{source_tag} ({file.filename})" if source_tag else file.filename
+
         expanded_rows = []
         for _, row in df.iterrows():
             en_val = str(row.get('英文译文', ''))
             if pd.isna(row.get('英文译文')) or not en_val.strip() or en_val.lower() == 'nan':
                 expanded_rows.append(row.to_dict())
                 continue
-                
             en_list = extract_en_suggestions_list(en_val)
-            if not en_list:
-                expanded_rows.append(row.to_dict())
+            if not en_list: expanded_rows.append(row.to_dict())
             else:
                 for en in en_list:
                     new_row = row.to_dict()
@@ -417,7 +411,7 @@ async def upload_excel(
                     sequence_id=seq_id, 
                     sequence_order=seq_order, 
                     category=item['category'],
-                    source_tag=source_tag
+                    source_tag=final_source
                 ))
                 db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
@@ -429,13 +423,16 @@ async def upload_excel(
 @app.post("/api/upload_docx")
 async def upload_docx(
     file: UploadFile = File(...), 
-    source_tag: str = Form(""), # 修改：默认空字符串
+    source_tag: str = Form(""), 
     db: Session = Depends(get_db), 
     current_user: User = Depends(require_editor)
 ):
     if file.filename.endswith('.doc'): return {"status": "error", "msg": "请先在本地另存为 .docx 格式后重试！"}
     elif not file.filename.endswith('.docx'): return {"status": "error", "msg": "请上传 .docx 文档！"}
     contents = await file.read()
+    
+    final_source = f"{source_tag} ({file.filename})" if source_tag else file.filename
+
     try: doc = docx.Document(io.BytesIO(contents))
     except Exception as e: return {"status": "error", "msg": f"读取失败: {e}"}
     extracted_data = []
@@ -472,7 +469,7 @@ async def upload_docx(
                     sequence_id=seq_id, 
                     sequence_order=seq_order, 
                     category=item['category'],
-                    source_tag=source_tag
+                    source_tag=final_source
                 ))
                 db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
@@ -509,11 +506,16 @@ async def match_docx(file: UploadFile = File(...), db: Session = Depends(get_db)
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     grouped = {}
     for item in matched:
-        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "source_tag": item.source_tag, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
-        grouped[item.zh_term]["translations"].add(item.en_translation)
+        if item.zh_term not in grouped: 
+            grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations_map": {}, "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        if item.en_translation not in grouped[item.zh_term]["translations_map"]:
+            grouped[item.zh_term]["translations_map"][item.en_translation] = item.source_tag
+        else:
+            grouped[item.zh_term]["translations_map"][item.en_translation] = merge_source_tags(grouped[item.zh_term]["translations_map"][item.en_translation], item.source_tag)
+    
     all_associated_items = {item.id: item for item in associated}.values()
     for zh, data in grouped.items():
-        data["translations"] = list(data["translations"])
+        data["translations"] = [{"text": en, "source_tag": tag} for en, tag in data.pop("translations_map").items()]
         if data["seq_id"]:
             bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
             bros.sort(key=lambda x: x.sequence_order or 0)
@@ -548,11 +550,16 @@ async def match_excel(file: UploadFile = File(...), db: Session = Depends(get_db
     associated = db.query(Signage).filter(Signage.sequence_id.in_(seq_ids)).all() if seq_ids else []
     grouped = {}
     for item in matched:
-        if item.zh_term not in grouped: grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "source_tag": item.source_tag, "translations": set(), "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
-        grouped[item.zh_term]["translations"].add(item.en_translation)
+        if item.zh_term not in grouped: 
+            grouped[item.zh_term] = {"zh_text": item.zh_term, "category": item.category, "translations_map": {}, "seq_id": item.sequence_id, "associated_items": [], "show_assoc": False}
+        if item.en_translation not in grouped[item.zh_term]["translations_map"]:
+            grouped[item.zh_term]["translations_map"][item.en_translation] = item.source_tag
+        else:
+            grouped[item.zh_term]["translations_map"][item.en_translation] = merge_source_tags(grouped[item.zh_term]["translations_map"][item.en_translation], item.source_tag)
+            
     all_associated_items = {item.id: item for item in associated}.values()
     for zh, data in grouped.items():
-        data["translations"] = list(data["translations"])
+        data["translations"] = [{"text": en, "source_tag": tag} for en, tag in data.pop("translations_map").items()]
         if data["seq_id"]:
             bros = [i for i in all_associated_items if i.sequence_id == data["seq_id"] and i.zh_term != zh]
             bros.sort(key=lambda x: x.sequence_order or 0)
