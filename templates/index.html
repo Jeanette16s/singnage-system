@@ -77,15 +77,20 @@
         .el-tag--danger  { background-color: #F7EAE8; color: var(--el-color-danger); }
         .el-tag--info    { background-color: #EEF0EF; color: var(--el-color-info); }
 
-        .translation-row { display: flex; align-items: center; margin-bottom: 12px; padding: 10px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
-        .translation-tag { font-size: 16px; font-weight: 500; margin-right: 20px; flex: 1; }
-        .action-btns { opacity: 0; transition: opacity 0.3s, transform 0.3s; transform: translateX(-10px); }
+        /* 译文布局升级：垂直排列 */
+        .translation-row { display: flex; align-items: center; margin-bottom: 12px; padding: 12px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
+        .trans-text-container { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
+        .translation-content-col { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+        
+        .translation-tag { font-size: 16px; font-weight: 500; flex: none; margin-right: 10px; }
+        
+        .action-btns { opacity: 0; transition: opacity 0.3s, transform 0.3s; transform: translateX(-10px); display: flex; gap: 8px; }
         .translation-row:hover .action-btns { opacity: 1; transform: translateX(0); }
-        .action-btns .el-button { border-radius: 8px; border-width: 2px; font-weight: bold; }
+        .action-btns .el-button { border-radius: 8px; border-width: 2px; font-weight: bold; margin-left: 0 !important; }
+        
         .delete-trans-btn { color: #C0C4CC; cursor: pointer; margin-left: 15px; padding: 2px; display: flex; align-items: center; border-radius: 50%; transition: all 0.2s ease; }
         .delete-trans-btn:hover { color: var(--el-color-danger); background-color: #F7EAE8; }
 
-        .trans-text-container { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
         .remark-dot { display: inline-block; width: 6px; height: 6px; background-color: #B83A2D; border-radius: 50%; margin-left: 8px; flex-shrink: 0; box-shadow: 0 0 4px rgba(184, 58, 45, 0.4); }
         .remark-hover-text { position: absolute; left: 0; bottom: 100%; margin-bottom: 6px; z-index: 100; font-size: 13px; color: var(--el-text-color-regular); background: #ffffff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); border: 1px solid var(--el-border-color-lighter); opacity: 0; visibility: hidden; transform: translateY(10px); transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1); white-space: normal; width: max-content; max-width: 320px; line-height: 1.5; pointer-events: none; }
         .translation-row:hover .remark-hover-text { opacity: 1; visibility: visible; transform: translateY(0); }
@@ -155,6 +160,7 @@
         </el-dropdown>
 
         <el-tabs tab-position="left" class="main-layout-tabs">
+            
             <el-tab-pane>
                 <template #label>
                     <span class="custom-tabs-label">
@@ -194,30 +200,38 @@
                     <div style="margin-bottom: 10px;">
                         <span style="font-weight: 600; color: var(--el-color-primary); font-size: 13px; text-transform: uppercase;">Standard Translations</span>
                         <div style="margin-top: 12px;">
-                            <div v-for="en in item.translations" :key="en" class="translation-row">
+                            <div v-for="enObj in item.translations" :key="enObj.text" class="translation-row">
                                 <div class="trans-text-container">
-                                    <span class="translation-tag">{{ parseTranslation(en).text }}</span>
-                                    <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
-                                    <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
-                                        {{ parseTranslation(en).remark }}
-                                    </span>
-                                </div>
-                                <div class="action-btns">
-                                    <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
-                                    <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
-                                </div>
-                                <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
-                                    <el-icon><Close /></el-icon>
+                                    <div class="translation-content-col">
+                                        <div style="display: flex; align-items: center;">
+                                            <span class="translation-tag">{{ parseTranslation(enObj.text).text }}</span>
+                                            <span v-if="parseTranslation(enObj.text).remark" class="remark-dot"></span>
+                                            <span v-if="parseTranslation(enObj.text).remark" class="remark-hover-text">
+                                                {{ parseTranslation(enObj.text).remark }}
+                                            </span>
+                                        </div>
+                                        
+                                        <div v-if="enObj.source_tag && enObj.source_tag.includes('官方规范')" style="font-size: 12px; color: var(--el-color-info); margin-top: 4px; display: flex; align-items: center; gap: 4px;">
+                                            <el-icon><CollectionTag /></el-icon> 来源：《深圳市公共服务领域英文译写规范》
+                                        </div>
+                                    </div>
+
+                                    <div class="action-btns">
+                                        <el-popover v-if="enObj.source_tag && enObj.source_tag !== '未标定'" placement="top" :width="280" trigger="click" :content="enObj.source_tag">
+                                            <template #reference>
+                                                <el-button size="small" type="info" plain icon="Document">查看来源</el-button>
+                                            </template>
+                                        </el-popover>
+
+                                        <el-button size="small" type="primary" plain icon="CopyDocument" @click="copyText(parseTranslation(enObj.text).text)">复制译文</el-button>
+                                        <el-button v-if="hasEditPermission" size="small" type="warning" plain icon="Edit" @click="openSearchEditDialog(item.zh_text, enObj.text, item.category)">编辑</el-button>
+                                    </div>
+                                    <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, enObj.text)" title="删除此译文">
+                                        <el-icon><Close /></el-icon>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    
-                    <div v-if="item.source_tag === '官方规范'" style="margin-top: 15px; padding-top: 10px; border-top: 1px solid #f0f0f0;">
-                        <span style="font-size: 12px; color: var(--el-color-info); display: flex; align-items: center; gap: 5px;">
-                            <el-icon><CollectionTag /></el-icon>
-                            来源：《深圳市公共服务领域英文译写规范》
-                        </span>
                     </div>
 
                     <div v-if="item.associated_items && item.associated_items.length > 0" class="asso-container">
@@ -229,7 +243,8 @@
                         </el-button>
                         <div v-show="item.show_assoc" class="asso-list">
                             <div v-for="asso in item.associated_items" :key="asso.zh_text" class="asso-item">
-                                <div class="asso-zh">{{ asso.order }}. {{ asso.zh_text }}</div><div class="asso-en">{{ asso.en_texts.join(' / ') }}</div>
+                                <div class="asso-zh">{{ asso.order }}. {{ asso.zh_text }}</div>
+                                <div class="asso-en">{{ asso.en_texts.map(e => e.text).join(' / ') }}</div>
                             </div>
                         </div>
                     </div>
@@ -272,20 +287,32 @@
                     <el-card class="box-card" v-for="item in matchResults" :key="item.zh_text">
                         <template #header><div style="display: flex; justify-content: space-between;"><span class="zh-title">{{ item.zh_text }}</span><el-tag :type="getCategoryType(item.category)">{{ item.category }}</el-tag></div></template>
                         <div style="margin-bottom: 10px;">
-                            <div v-for="en in item.translations" :key="en" class="translation-row">
+                            <div v-for="enObj in item.translations" :key="enObj.text" class="translation-row">
                                 <div class="trans-text-container">
-                                    <span class="translation-tag">{{ parseTranslation(en).text }}</span>
-                                    <span v-if="parseTranslation(en).remark" class="remark-dot"></span>
-                                    <span v-if="parseTranslation(en).remark" class="remark-hover-text" :title="parseTranslation(en).remark">
-                                        {{ parseTranslation(en).remark }}
-                                    </span>
-                                </div>
-                                <div class="action-btns">
-                                    <el-button size="small" type="primary" plain @click="copyText(parseTranslation(en).text)">复制译文</el-button>
-                                    <el-button v-if="hasEditPermission" size="small" type="warning" plain @click="openSearchEditDialog(item.zh_text, en, item.category)">编辑</el-button>
-                                </div>
-                                <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, en)" title="删除此译文">
-                                    <el-icon><Close /></el-icon>
+                                    <div class="translation-content-col">
+                                        <div style="display: flex; align-items: center;">
+                                            <span class="translation-tag">{{ parseTranslation(enObj.text).text }}</span>
+                                            <span v-if="parseTranslation(enObj.text).remark" class="remark-dot"></span>
+                                            <span v-if="parseTranslation(enObj.text).remark" class="remark-hover-text">
+                                                {{ parseTranslation(enObj.text).remark }}
+                                            </span>
+                                        </div>
+                                        <div v-if="enObj.source_tag && enObj.source_tag.includes('官方规范')" style="font-size: 12px; color: var(--el-color-info); margin-top: 4px; display: flex; align-items: center; gap: 4px;">
+                                            <el-icon><CollectionTag /></el-icon> 来源：《深圳市公共服务领域英文译写规范》
+                                        </div>
+                                    </div>
+                                    <div class="action-btns">
+                                        <el-popover v-if="enObj.source_tag && enObj.source_tag !== '未标定'" placement="top" :width="280" trigger="click" :content="enObj.source_tag">
+                                            <template #reference>
+                                                <el-button size="small" type="info" plain icon="Document">查看来源</el-button>
+                                            </template>
+                                        </el-popover>
+                                        <el-button size="small" type="primary" plain icon="CopyDocument" @click="copyText(parseTranslation(enObj.text).text)">复制译文</el-button>
+                                        <el-button v-if="hasEditPermission" size="small" type="warning" plain icon="Edit" @click="openSearchEditDialog(item.zh_text, enObj.text, item.category)">编辑</el-button>
+                                    </div>
+                                    <div v-if="hasEditPermission" class="delete-trans-btn" @click="deleteTranslation(item.zh_text, enObj.text)" title="删除此译文">
+                                        <el-icon><Close /></el-icon>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -346,7 +373,6 @@
                 </el-card>
             </el-tab-pane>
 
-            <!-- 新增：个人数据 Tab页 -->
             <el-tab-pane v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
@@ -418,7 +444,6 @@
                 </el-card>
             </el-tab-pane>
 
-            <!-- 更名：历史记录 -->
             <el-tab-pane v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
@@ -484,7 +509,6 @@
 
     </template>
 
-    <!-- 新增：独立的修改密码弹窗 -->
     <el-dialog title="修改登录密码" v-model="pwdDialogVisible" width="400px">
         <el-form :model="pwdForm" label-position="top">
             <el-form-item label="当前密码"><el-input type="password" v-model="pwdForm.old_password" show-password></el-input></el-form-item>
@@ -497,14 +521,15 @@
         </template>
     </el-dialog>
 
-    <el-dialog title="上传预设" v-model="uploadConfigVisible" width="400px" :close-on-click-modal="false">
-        <div style="text-align: center; margin-bottom: 20px;">
-            <el-icon size="40" color="#F2A950"><QuestionFilled /></el-icon>
-            <p>请为即将上传的文档选择来源属性</p>
+    <el-dialog title="确认解析并入库" v-model="uploadConfigVisible" width="450px" :close-on-click-modal="false">
+        <div style="font-size: 14px; margin-bottom: 20px; color: var(--el-text-color-regular); text-align: center;">
+            <el-icon size="40" color="var(--el-color-primary)" style="margin-bottom: 10px;"><DocumentChecked /></el-icon>
+            <div style="margin-bottom: 10px;">即将解析文件：<br><strong style="color: var(--el-color-primary); font-size: 16px;">{{ tempUploadFile ? tempUploadFile.file.name : '' }}</strong></div>
+            <span style="font-size: 12px; color: #888;">*系统将自动读取该文件名并记录至词条的来源中。</span>
         </div>
         <el-radio-group v-model="tempUploadTag" style="display: flex; flex-direction: column; gap: 10px;">
-            <el-radio border label="官方规范" style="width: 100%; margin: 0;">官方规范（深圳市译写规范）</el-radio>
-            <el-radio border label="" style="width: 100%; margin: 0;">暂不标定</el-radio>
+            <el-radio border label="官方规范" style="width: 100%; margin: 0;">附加标签：官方规范（深圳市译写规范）</el-radio>
+            <el-radio border label="" style="width: 100%; margin: 0;">仅记录文件名，不附加标签</el-radio>
         </el-radio-group>
         <template #footer>
             <el-button @click="uploadConfigVisible = false">取消</el-button>
@@ -585,7 +610,7 @@
                 myUploadsData: [], myUploadsFilter: '', myUploadsLoading: false, selectedUploads: [],
                 selectedHourSlot: '',
                 
-                pwdDialogVisible: false, // 替换了抽屉，改用小弹窗
+                pwdDialogVisible: false,
                 pwdForm: { old_password: '', new_password: '', confirm_password: '' }, isUpdatingPwd: false,
                 
                 searchEditDialogVisible: false, isEditingSearch: false, searchEditForm: { old_zh: '', old_en: '', new_zh: '', new_en: '', category: '' },
@@ -601,9 +626,7 @@
         },
         computed: {
             hasEditPermission() { return this.userRole === 'admin' || this.userRole === 'editor'; },
-            displayedResults() {
-                return this.searchResults.slice(0, this.displayedCount);
-            },
+            displayedResults() { return this.searchResults.slice(0, this.displayedCount); },
             availableTimeSlots() {
                 if (!this.myUploadsData.length) return [];
                 const slots = new Set();
@@ -617,9 +640,7 @@
             },
             filteredMyUploads() {
                 let data = this.myUploadsData;
-                if (this.myUploadsFilter) {
-                    data = data.filter(i => i.action_type === this.myUploadsFilter);
-                }
+                if (this.myUploadsFilter) { data = data.filter(i => i.action_type === this.myUploadsFilter); }
                 if (this.selectedHourSlot) {
                     const targetHour = this.selectedHourSlot.split(':')[0];
                     data = data.filter(i => i.created_at && i.created_at.substring(11, 13) === targetHour);
@@ -644,9 +665,7 @@
                 }
                 return { text: fullText, remark: '' };
             },
-
             loadMore() { this.displayedCount += 50; },
-
             verifyToken() {
                 axios.get('/api/verify_token').then(res => {
                     if (res.data.status === 'success') {
@@ -654,9 +673,7 @@
                         this.handleSearch(false);
                         this.fetchStats(); 
                         if (this.hasEditPermission) {
-                            this.fetchRecentAdditions();
-                            this.fetchAdminHistory();
-                            this.fetchMyUploads(); // 加载页面时直接获取个人数据，确保Tab页内容就绪
+                            this.fetchRecentAdditions(); this.fetchAdminHistory(); this.fetchMyUploads();
                         }
                         if (this.userRole === 'admin') { this.fetchUsers(); }
                     }
@@ -669,13 +686,8 @@
                     localStorage.setItem('token', res.data.access_token); localStorage.setItem('role', res.data.role); localStorage.setItem('username', res.data.username);
                     this.isLoggedIn = true; this.userRole = res.data.role; this.username = res.data.username;
                     ElementPlus.ElMessage.success('欢迎回来！');
-                    this.handleSearch(false);
-                    this.fetchStats(); 
-                    if (this.hasEditPermission) {
-                        this.fetchRecentAdditions();
-                        this.fetchAdminHistory();
-                        this.fetchMyUploads(); // 登录后顺便加载个人数据
-                    }
+                    this.handleSearch(false); this.fetchStats(); 
+                    if (this.hasEditPermission) { this.fetchRecentAdditions(); this.fetchAdminHistory(); this.fetchMyUploads(); }
                     if (this.userRole === 'admin') { this.fetchUsers(); }
                 }).finally(() => { this.isLoggingIn = false; });
             },
@@ -685,14 +697,8 @@
                     if (this.paddedTotal.length !== totalStr.length) {
                         this.paddedTotal = Array.from({length: totalStr.length}, () => '0');
                         this.rollTarget = Array.from({length: totalStr.length}, () => 0);
-                        this.$nextTick(() => {
-                            setTimeout(() => {
-                                this.rollTarget = totalStr.split('').map(Number);
-                            }, 50);
-                        });
-                    } else {
-                        this.rollTarget = totalStr.split('').map(Number);
-                    }
+                        this.$nextTick(() => { setTimeout(() => { this.rollTarget = totalStr.split('').map(Number); }, 50); });
+                    } else { this.rollTarget = totalStr.split('').map(Number); }
                 });
             },
             handleRegister() {
@@ -706,33 +712,22 @@
                 }).finally(() => { this.isRegistering = false; });
             },
             handleLogout() { localStorage.clear(); this.isLoggedIn = false; window.location.reload(); },
-            
-            // 更新后的头像菜单处理逻辑
             handleAvatarCommand(command) {
-                if (command === 'logout') { this.handleLogout(); }
-                else if (command === 'password') { this.pwdDialogVisible = true; } // 唤起修改密码弹窗
+                if (command === 'logout') { this.handleLogout(); } else if (command === 'password') { this.pwdDialogVisible = true; }
             },
-            
-            handleSourceFilter(command) {
-                this.myUploadsFilter = command;
-            },
+            handleSourceFilter(command) { this.myUploadsFilter = command; },
             fetchMyUploads() {
                 this.myUploadsLoading = true;
-                axios.get('/api/history', { params: { username: this.username, limit: 1000 } }).then(res => {
-                    let data = res.data.data;
-                    this.myUploadsData = data;
-                }).finally(() => { this.myUploadsLoading = false; });
+                axios.get('/api/history', { params: { username: this.username, limit: 1000 } }).then(res => { this.myUploadsData = res.data.data; }).finally(() => { this.myUploadsLoading = false; });
             },
             handleSelectionChange(val) { this.selectedUploads = val; },
             batchDeleteUploads() {
                 ElementPlus.ElMessageBox.confirm(`确定要永久删除这 ${this.selectedUploads.length} 条记录吗？词库中的同步数据也会消失。`, '批量操作提示', { type: 'error', confirmButtonText: '全部删除' }).then(() => {
-                    const ids = this.selectedUploads.map(item => item.id);
-                    const fd = new FormData(); fd.append('id_list', JSON.stringify(ids));
+                    const ids = this.selectedUploads.map(item => item.id); const fd = new FormData(); fd.append('id_list', JSON.stringify(ids));
                     axios.post('/api/history/batch_delete', fd).then(res => {
                         if (res.data.status === 'success') {
                             ElementPlus.ElMessage.success(res.data.msg);
-                            this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); 
-                            this.handleSearch(true); 
+                            this.fetchMyUploads(); this.fetchRecentAdditions(); this.fetchStats(); this.handleSearch(true); 
                             if(this.hasEditPermission) this.fetchAdminHistory();
                         } else ElementPlus.ElMessage.error(res.data.msg);
                     });
@@ -741,31 +736,20 @@
             batchTagUploads(command) {
                 let confirmMsg = command ? `确定要将这 ${this.selectedUploads.length} 条记录对应的主词库数据标记为【${command}】吗？` : `确定要清除这 ${this.selectedUploads.length} 条记录的标签吗？`;
                 ElementPlus.ElMessageBox.confirm(confirmMsg, '批量打标确认', { type: 'warning', confirmButtonText: '确定' }).then(() => {
-                    const ids = this.selectedUploads.map(item => item.id);
-                    const fd = new FormData(); 
-                    fd.append('id_list', JSON.stringify(ids));
-                    fd.append('tag_value', command);
-                    
+                    const ids = this.selectedUploads.map(item => item.id); const fd = new FormData(); fd.append('id_list', JSON.stringify(ids)); fd.append('tag_value', command);
                     axios.post('/api/history/batch_tag', fd).then(res => {
-                        if (res.data.status === 'success') {
-                            ElementPlus.ElMessage.success(res.data.msg);
-                            this.handleSearch(true); 
-                        } else {
-                            ElementPlus.ElMessage.error(res.data.msg);
-                        }
+                        if (res.data.status === 'success') { ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(true); } 
+                        else { ElementPlus.ElMessage.error(res.data.msg); }
                     });
                 }).catch(() => {});
             },
             submitPasswordChange() {
                 if (!this.pwdForm.old_password || !this.pwdForm.new_password) return ElementPlus.ElMessage.warning('请填写完整');
                 if (this.pwdForm.new_password !== this.pwdForm.confirm_password) return ElementPlus.ElMessage.error('两次新密码不一致！');
-                this.isUpdatingPwd = true;
-                const fd = new FormData(); fd.append('old_password', this.pwdForm.old_password); fd.append('new_password', this.pwdForm.new_password);
+                this.isUpdatingPwd = true; const fd = new FormData(); fd.append('old_password', this.pwdForm.old_password); fd.append('new_password', this.pwdForm.new_password);
                 axios.post('/api/users/update_password', fd).then(res => {
                     if (res.data.status === 'success') {
-                        ElementPlus.ElMessage.success(res.data.msg);
-                        this.pwdForm = { old_password: '', new_password: '', confirm_password: '' };
-                        this.pwdDialogVisible = false; // 关闭弹窗
+                        ElementPlus.ElMessage.success(res.data.msg); this.pwdForm = { old_password: '', new_password: '', confirm_password: '' }; this.pwdDialogVisible = false;
                     } else ElementPlus.ElMessage.error(res.data.msg);
                 }).finally(() => { this.isUpdatingPwd = false; });
             },
@@ -773,8 +757,7 @@
             updateRole(userId, newRole) {
                 const fd = new FormData(); fd.append('user_id', userId); fd.append('role', newRole);
                 axios.post('/api/users/role', fd).then(res => {
-                    if(res.data.status === 'success') ElementPlus.ElMessage.success(res.data.msg);
-                    else { ElementPlus.ElMessage.error(res.data.msg); this.fetchUsers(); }
+                    if(res.data.status === 'success') ElementPlus.ElMessage.success(res.data.msg); else { ElementPlus.ElMessage.error(res.data.msg); this.fetchUsers(); }
                 });
             },
             deleteUser(id) {
@@ -786,9 +769,7 @@
                 const keepPage = preservePage === true;
                 axios.get('/api/search', { params: { keyword: this.searchKeyword } }).then(res => {
                     this.searchResults = res.data.data;
-                    if (!keepPage) {
-                        this.displayedCount = 50; 
-                    }
+                    if (!keepPage) { this.displayedCount = 50; }
                     if(this.searchResults.length === 0 && this.searchKeyword) ElementPlus.ElMessage.warning('未能匹配到结果');
                 });
             },
@@ -801,9 +782,7 @@
                 this.isEditingSearch = true; const fd = new FormData(); fd.append('old_zh', this.searchEditForm.old_zh); fd.append('old_en', this.searchEditForm.old_en); fd.append('new_zh', this.searchEditForm.new_zh); fd.append('new_en', this.searchEditForm.new_en); fd.append('category', this.searchEditForm.category);
                 axios.post('/api/edit_signage', fd).then(res => { 
                     if (res.data.status === 'success') { 
-                        ElementPlus.ElMessage.success(res.data.msg); 
-                        this.searchEditDialogVisible = false; 
-                        this.handleSearch(true); 
+                        ElementPlus.ElMessage.success(res.data.msg); this.searchEditDialogVisible = false; this.handleSearch(true); 
                         if(this.hasEditPermission) this.fetchAdminHistory(); 
                     } else ElementPlus.ElMessage.error(res.data.msg); 
                 }).finally(() => { this.isEditingSearch = false; });
@@ -813,9 +792,7 @@
                     const fd = new FormData(); fd.append('zh_term', zh); fd.append('en_translation', en);
                     axios.post('/api/delete_signage', fd).then(res => { 
                         if(res.data.status === 'success') { 
-                            ElementPlus.ElMessage.success(res.data.msg); 
-                            this.handleSearch(true); 
-                            this.fetchStats(); 
+                            ElementPlus.ElMessage.success(res.data.msg); this.handleSearch(true); this.fetchStats(); 
                             if(this.hasEditPermission) this.fetchAdminHistory(); 
                         } 
                     });
@@ -842,56 +819,32 @@
                     if (res.data.status === 'success') { this.matchResults = res.data.data; this.hasMatched = true; options.onSuccess(res.data); } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
                 }).finally(() => { setTimeout(() => { this.isMatching = false; }, 800); });
             },
-            customUpload(options) {
-                this.tempUploadFile = options;
-                this.uploadConfigVisible = true;
-            },
+            customUpload(options) { this.tempUploadFile = options; this.uploadConfigVisible = true; },
             confirmAndExecuteUpload() {
-                this.uploadConfigVisible = false;
-                const options = this.tempUploadFile;
-                const formData = new FormData(); 
-                formData.append('file', options.file);
-                formData.append('source_tag', this.tempUploadTag); 
+                this.uploadConfigVisible = false; const options = this.tempUploadFile; const formData = new FormData(); 
+                formData.append('file', options.file); formData.append('source_tag', this.tempUploadTag); 
 
                 let url = options.file.name.endsWith('.xlsx') ? '/api/upload_excel' : '/api/upload_docx';
                 this.uploading = true; this.uploadPercent = 0; this.uploadStatusText = '入库处理中...';
                 
                 axios.post(url, formData, { onUploadProgress: p => { this.uploadPercent = Math.round((p.loaded * 100) / p.total); } }).then(res => {
                     if (res.data.status === 'success') { 
-                        ElementPlus.ElMessage({
-                            message: res.data.msg,
-                            type: 'success',
-                            duration: 10000,
-                            showClose: true
-                        });
-                        this.fetchRecentAdditions(); 
-                        this.fetchStats(); 
-                        if(this.hasEditPermission) {
-                            this.fetchAdminHistory();
-                            this.fetchMyUploads();
-                        }
+                        ElementPlus.ElMessage({ message: res.data.msg, type: 'success', duration: 10000, showClose: true });
+                        this.fetchRecentAdditions(); this.fetchStats(); 
+                        if(this.hasEditPermission) { this.fetchAdminHistory(); this.fetchMyUploads(); }
                         options.onSuccess(res.data); 
-                    } else { 
-                        ElementPlus.ElMessage.error(res.data.msg); 
-                        options.onError(); 
-                    }
+                    } else { ElementPlus.ElMessage.error(res.data.msg); options.onError(); }
                 }).finally(() => { setTimeout(() => { this.uploading = false; }, 1000); });
             },
-            fetchRecentAdditions() { 
-                axios.get('/api/history', { params: { username: this.username, limit: 10 } }).then(res => { this.recentAdditions = res.data.data; }); 
-            },
-            fetchAdminHistory() { 
-                axios.get('/api/history', { params: { category: this.adminHistoryFilterCategory, limit: 500 } }).then(res => { this.adminHistoryData = res.data.data; }); 
-            },
+            fetchRecentAdditions() { axios.get('/api/history', { params: { username: this.username, limit: 10 } }).then(res => { this.recentAdditions = res.data.data; }); },
+            fetchAdminHistory() { axios.get('/api/history', { params: { category: this.adminHistoryFilterCategory, limit: 500 } }).then(res => { this.adminHistoryData = res.data.data; }); },
             openHistoryEditDialog(row) { this.historyEditForm = { id: row.id, zh_term: row.zh_term, en_translation: row.en_translation, category: row.category }; this.historyEditDialogVisible = true; },
             submitHistoryEdit() {
                 this.isEditingHistory = true; const fd = new FormData(); fd.append('id', this.historyEditForm.id); fd.append('zh_term', this.historyEditForm.zh_term); fd.append('en_translation', this.historyEditForm.en_translation); fd.append('category', this.historyEditForm.category);
                 axios.post('/api/history/update', fd).then(res => { if(res.data.status === 'success') { 
-                    ElementPlus.ElMessage.success(res.data.msg); 
-                    this.historyEditDialogVisible = false; 
+                    ElementPlus.ElMessage.success(res.data.msg); this.historyEditDialogVisible = false; 
                     if(this.hasEditPermission) this.fetchAdminHistory(); 
-                    this.fetchMyUploads();
-                    this.handleSearch(true);
+                    this.fetchMyUploads(); this.handleSearch(true);
                 } }).finally(() => { this.isEditingHistory = false; });
             },
             deleteHistoryRecord(id, isAdminTab = false) {
@@ -899,11 +852,9 @@
                     const fd = new FormData(); fd.append('id', id); 
                     axios.post('/api/history/delete', fd).then(res => { 
                         if(res.data.status === 'success') { 
-                            ElementPlus.ElMessage.success('已清退数据'); 
-                            this.fetchStats(); 
+                            ElementPlus.ElMessage.success('已清退数据'); this.fetchStats(); 
                             if(isAdminTab) this.fetchAdminHistory(); 
-                            this.fetchMyUploads();
-                            this.handleSearch(true);
+                            this.fetchMyUploads(); this.handleSearch(true);
                         } 
                     });
                 }).catch(() => {});
@@ -914,10 +865,7 @@
                 }); 
             },
             getCategoryType(cat) { const map = { '强制类': 'danger', '提示类': 'warning', '限制类': 'info', '指示类': 'success' }; return map[cat] || 'primary'; },
-            formatDate(dateStr) { 
-                if(!dateStr) return ''; 
-                return dateStr.replace('T', ' ').substring(0, 19);
-            }
+            formatDate(dateStr) { if(!dateStr) return ''; return dateStr.replace('T', ' ').substring(0, 19); }
         }
     };
     
