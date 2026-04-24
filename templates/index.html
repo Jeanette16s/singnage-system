@@ -77,7 +77,6 @@
         .el-tag--danger  { background-color: #F7EAE8; color: var(--el-color-danger); }
         .el-tag--info    { background-color: #EEF0EF; color: var(--el-color-info); }
 
-        /* 译文布局升级：垂直排列 */
         .translation-row { display: flex; align-items: center; margin-bottom: 12px; padding: 12px 15px; background: #F8F7F4; border-radius: 10px; border: 1px solid var(--el-border-color-lighter); }
         .trans-text-container { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
         .translation-content-col { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
@@ -159,9 +158,9 @@
             </template>
         </el-dropdown>
 
-        <el-tabs tab-position="left" class="main-layout-tabs">
+        <el-tabs tab-position="left" class="main-layout-tabs" v-model="activeTab">
             
-            <el-tab-pane>
+            <el-tab-pane name="search">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><Search /></el-icon>
@@ -257,7 +256,7 @@
                 </div>
             </el-tab-pane>
 
-            <el-tab-pane>
+            <el-tab-pane name="match">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><Document /></el-icon>
@@ -321,7 +320,7 @@
                 <el-empty v-else-if="hasMatched" description="此文档提取出的文本，未在当前词库中匹配到任何内容" image-size="120"></el-empty>
             </el-tab-pane>
 
-            <el-tab-pane v-if="hasEditPermission">
+            <el-tab-pane name="add" v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><Edit /></el-icon>
@@ -373,7 +372,7 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane v-if="hasEditPermission">
+            <el-tab-pane name="personal" v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><Notebook/></el-icon>
@@ -444,7 +443,7 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane v-if="hasEditPermission">
+            <el-tab-pane name="history" v-if="hasEditPermission">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><List /></el-icon>
@@ -474,7 +473,7 @@
                 </el-card>
             </el-tab-pane>
 
-            <el-tab-pane v-if="userRole === 'admin'">
+            <el-tab-pane name="users" v-if="userRole === 'admin'">
                 <template #label>
                     <span class="custom-tabs-label">
                         <el-icon><User /></el-icon>
@@ -590,6 +589,10 @@
                 userRole: localStorage.getItem('role') || 'viewer',
                 username: localStorage.getItem('username') || '',
                 
+                // 修改点 3：新增 activeTab 与 loadedTabs 进行懒加载状态管理
+                activeTab: 'search',
+                loadedTabs: [],
+                
                 isRegisterMode: false,
                 loginForm: { username: '', password: '' }, isLoggingIn: false,
                 registerForm: { username: '', password: '', confirmPassword: '' }, isRegistering: false,
@@ -648,10 +651,38 @@
                 return data;
             }
         },
+        // 修改点 4：使用 watch 监听 activeTab 的变化
+        watch: {
+            activeTab(newTab) {
+                this.handleTabChange(newTab);
+            }
+        },
         mounted() {
             if (this.isLoggedIn) this.verifyToken();
         },
         methods: {
+            // 修改点 5：封装专门的懒加载方法
+            handleTabChange(tabName) {
+                // 如果这个 Tab 已经加载过，就不再重复发请求
+                if (this.loadedTabs.includes(tabName)) return;
+
+                if (tabName === 'search') {
+                    this.handleSearch(false);
+                    this.fetchStats();
+                } else if (tabName === 'add' && this.hasEditPermission) {
+                    this.fetchRecentAdditions();
+                } else if (tabName === 'personal' && this.hasEditPermission) {
+                    this.fetchMyUploads();
+                } else if (tabName === 'history' && this.hasEditPermission) {
+                    this.fetchAdminHistory();
+                } else if (tabName === 'users' && this.userRole === 'admin') {
+                    this.fetchUsers();
+                }
+                
+                // 标记为已拉取过数据
+                this.loadedTabs.push(tabName);
+            },
+            
             parseTranslation(fullText) {
                 if (!fullText) return { text: '', remark: '' };
                 const regex = /[(（\[【][^)）\]】]*[\u4e00-\u9fa5][^)）\]】]*[)）\]】]/g;
@@ -666,16 +697,13 @@
                 return { text: fullText, remark: '' };
             },
             loadMore() { this.displayedCount += 50; },
+            
+            // 修改点 6：重写初始登录逻辑，只触发当前活跃的 Tab 加载
             verifyToken() {
                 axios.get('/api/verify_token').then(res => {
                     if (res.data.status === 'success') {
                         this.userRole = res.data.role; this.username = res.data.username;
-                        this.handleSearch(false);
-                        this.fetchStats(); 
-                        if (this.hasEditPermission) {
-                            this.fetchRecentAdditions(); this.fetchAdminHistory(); this.fetchMyUploads();
-                        }
-                        if (this.userRole === 'admin') { this.fetchUsers(); }
+                        this.handleTabChange(this.activeTab); // 仅触发当前 Tab 的数据请求
                     }
                 });
             },
@@ -686,11 +714,11 @@
                     localStorage.setItem('token', res.data.access_token); localStorage.setItem('role', res.data.role); localStorage.setItem('username', res.data.username);
                     this.isLoggedIn = true; this.userRole = res.data.role; this.username = res.data.username;
                     ElementPlus.ElMessage.success('欢迎回来！');
-                    this.handleSearch(false); this.fetchStats(); 
-                    if (this.hasEditPermission) { this.fetchRecentAdditions(); this.fetchAdminHistory(); this.fetchMyUploads(); }
-                    if (this.userRole === 'admin') { this.fetchUsers(); }
+                    this.loadedTabs = []; // 清空之前的加载记录
+                    this.handleTabChange(this.activeTab); // 仅触发当前 Tab 的数据请求
                 }).finally(() => { this.isLoggingIn = false; });
             },
+            
             fetchStats() {
                 axios.get('/api/stats').then(res => {
                     const totalStr = String(res.data.total);
