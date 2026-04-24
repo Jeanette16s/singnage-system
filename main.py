@@ -243,7 +243,16 @@ def get_stats(db: Session = Depends(get_db), current_user: User = Depends(get_cu
 @app.get("/api/search")
 def search_signage(keyword: str = "", db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     clean_keyword = keyword.replace('\n', '').replace('\r', '').replace(' ', '')
-    all_signs = db.query(Signage).all()
+    
+    # 【优化核心】：根据是否有关键字，决定数据库的查询范围
+    if not clean_keyword:
+        # 如果关键词为空（通常是首页默认加载），只查询最新加入的 100 条记录
+        # 避免全表扫描，瞬间释放数据库连接
+        all_signs = db.query(Signage).order_by(Signage.id.desc()).limit(100).all()
+    else:
+        # 有关键词时，再获取全量数据进行 SequenceMatcher 模糊匹配
+        all_signs = db.query(Signage).all()
+        
     grouped = {}
     
     if not clean_keyword:
@@ -263,18 +272,22 @@ def search_signage(keyword: str = "", db: Session = Depends(get_db), current_use
             if not sign.zh_term or str(sign.zh_term).lower() == 'nan': continue
             clean_zh = str(sign.zh_term).replace('\n', '').replace('\r', '').replace(' ', '')
             if not clean_zh: continue
-            if clean_keyword == clean_zh: score = 100.0
+            
+            if clean_keyword == clean_zh: 
+                score = 100.0
             else:
                 score = SequenceMatcher(None, clean_keyword, clean_zh).ratio() * 100.0
                 if clean_keyword in clean_zh or clean_zh in clean_keyword:
                     len_ratio = min(len(clean_keyword), len(clean_zh)) / max(len(clean_keyword), len(clean_zh))
                     score = max(score, 70.0 + 29.0 * len_ratio)
+                    
             if score >= 40.0:
                 zh = sign.zh_term
                 if zh not in grouped: 
                     grouped[zh] = {"zh_text": zh, "category": sign.category, "translations_map": {}, "seq_id": sign.sequence_id, "associated_items": [], "show_assoc": False, "match_score": score}
                 
-                if score > grouped[zh]["match_score"]: grouped[zh]["match_score"] = score
+                if score > grouped[zh]["match_score"]: 
+                    grouped[zh]["match_score"] = score
                 
                 if sign.en_translation not in grouped[zh]["translations_map"]:
                     grouped[zh]["translations_map"][sign.en_translation] = sign.source_tag
