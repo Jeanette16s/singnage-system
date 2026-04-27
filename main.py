@@ -417,9 +417,11 @@ async def upload_excel(
         expanded_df = pd.DataFrame(expanded_rows)
         processed_list = process_dataframe_pipeline(expanded_df)
         
-        added_count, skip_count = 0, 0
+        added_count, skip_count, tag_updated_count = 0, 0, 0
         for item in processed_list:
-            if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+            existing_sign = db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first()
+            
+            if not existing_sign:
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 db.add(Signage(
@@ -432,9 +434,21 @@ async def upload_excel(
                 ))
                 db.add(ActionHistory(action_type="Excel导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
-            else: skip_count += 1
+            else:
+                # 【优化点】：如果是重复项，则尝试保留/合并新传入的来源标签
+                merged_tag = merge_source_tags(existing_sign.source_tag, final_source)
+                if merged_tag != existing_sign.source_tag:
+                    existing_sign.source_tag = merged_tag
+                    tag_updated_count += 1
+                skip_count += 1
+                
         db.commit()
-        return {"status": "success", "msg": f"解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"}
+        
+        msg = f"解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"
+        if tag_updated_count > 0:
+            msg += f" 其中为 {tag_updated_count} 个重复项补充了新的来源标签。"
+            
+        return {"status": "success", "msg": msg}
     except Exception as e: return {"status": "error", "msg": str(e)}
 
 @app.post("/api/upload_docx")
@@ -475,9 +489,12 @@ async def upload_docx(
     try:
         df = pd.DataFrame(extracted_data)
         processed_list = process_dataframe_pipeline(df)
-        added_count, skip_count = 0, 0
+        
+        added_count, skip_count, tag_updated_count = 0, 0, 0
         for item in processed_list:
-            if not db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first():
+            existing_sign = db.query(Signage).filter_by(zh_term=item['zh_text'], en_translation=item['en_text']).first()
+            
+            if not existing_sign:
                 seq_id = None if pd.isna(item['seq_id']) else str(item['seq_id'])
                 seq_order = None if pd.isna(item['seq_order']) else int(item['seq_order'])
                 db.add(Signage(
@@ -490,9 +507,21 @@ async def upload_docx(
                 ))
                 db.add(ActionHistory(action_type="Word导入", zh_term=item['zh_text'], en_translation=item['en_text'], category=item['category'], username=current_user.username))
                 added_count += 1
-            else: skip_count += 1
+            else:
+                # 【优化点】：如果是重复项，则尝试保留/合并新传入的来源标签
+                merged_tag = merge_source_tags(existing_sign.source_tag, final_source)
+                if merged_tag != existing_sign.source_tag:
+                    existing_sign.source_tag = merged_tag
+                    tag_updated_count += 1
+                skip_count += 1
+                
         db.commit()
-        return {"status": "success", "msg": f"Word 解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"}
+        
+        msg = f"Word 解析完毕！新增 {added_count} 条，由于重复跳过 {skip_count} 条。"
+        if tag_updated_count > 0:
+            msg += f" 其中为 {tag_updated_count} 个重复项补充了新的来源标签。"
+            
+        return {"status": "success", "msg": msg}
     except Exception as e: return {"status": "error", "msg": str(e)}
 
 @app.post("/api/match_docx")
