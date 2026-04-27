@@ -108,6 +108,9 @@ def extract_en_suggestions_list(text: str) -> list:
     if "英文:" in text: 
         text = text.split("英文:")[1].strip()
 
+    # 【修复点 1】：将中文弯引号（很多时候是输入法或 Office 自动替换的）提前转换为标准的英文单引号
+    text = text.replace("‘", "'").replace("’", "'")
+
     parts = re.split(r'\s*或\s*|\s+\bor\b\s+', text, flags=re.IGNORECASE)
     
     results = []
@@ -121,7 +124,8 @@ def extract_en_suggestions_list(text: str) -> list:
         for i, b in enumerate(brackets):
             masked_text = masked_text.replace(b, f" __BRK_{i}__ ")
             
-        masked_text = re.sub(r'[\u4e00-\u9fa5。，、；：“”‘’！？]+', ' ', masked_text)
+        # 【修复点 2】：从正则中移除对 ‘’ 的匹配过滤，让所有单引号都能安全通过
+        masked_text = re.sub(r'[\u4e00-\u9fa5。，、；：“”！？]+', ' ', masked_text)
         
         for i, b in enumerate(brackets):
             masked_text = masked_text.replace(f" __BRK_{i}__ ", b).replace(f"__BRK_{i}__", b)
